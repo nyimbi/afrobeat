@@ -1,0 +1,118 @@
+version: 2
+
+updates:
+  # ── Python (pip) — workspace root ────────────────────────────────────────────
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      pydantic:
+        patterns: ["pydantic*"]
+      opentelemetry:
+        patterns: ["opentelemetry*"]
+      fastapi-stack:
+        patterns: ["fastapi", "uvicorn", "starlette", "httpx"]
+      torch:
+        patterns: ["torch*", "torchaudio*", "transformers*", "accelerate*", "peft*"]
+    ignore:
+      - dependency-name: "torch*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "transformers"
+        update-types: ["version-update:semver-major"]
+
+  # ── npm — web service ─────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/services/web"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+    groups:
+      next-stack:
+        patterns: ["next", "react", "react-dom"]
+      radix-ui:
+        patterns: ["@radix-ui/*"]
+      tanstack:
+        patterns: ["@tanstack/*"]
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+
+  # ── GitHub Actions ────────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      actions-core:
+        patterns: ["actions/*"]
+      docker-actions:
+        patterns: ["docker/*"]
+
+  # ── Docker base images — api ───────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: "/services/api"
+    schedule:
+      interval: monthly
+      day: 1
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # ── Docker base images — worker ────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: "/services/worker"
+    schedule:
+      interval: monthly
+      day: 1
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # ── Docker base images — ml ────────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: "/services/ml"
+    schedule:
+      interval: monthly
+      day: 1
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # ── Docker base images — web ───────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: "/services/web"
+    schedule:
+      interval: monthly
+      day: 1
+      time: "06:00"
+      timezone: "Africa/Lagos"
+    labels:
+      - "dependencies"
+      - "docker"

@@ -1,0 +1,82 @@
+{
+	"proxies": [
+		{
+			"name": "postgres",
+			"listen": "0.0.0.0:5433",
+			"upstream": "localhost:5432",
+			"enabled": true,
+			"toxics": []
+		},
+		{
+			"name": "redis",
+			"listen": "0.0.0.0:6380",
+			"upstream": "localhost:6379",
+			"enabled": true,
+			"toxics": []
+		}
+	],
+	"presets": {
+		"db_latency": {
+			"proxy": "postgres",
+			"toxic": {
+				"name": "db_latency",
+				"type": "latency",
+				"stream": "downstream",
+				"toxicity": 1.0,
+				"attributes": {
+					"latency": 200,
+					"jitter": 20
+				}
+			}
+		},
+		"db_packet_loss": {
+			"proxy": "postgres",
+			"toxic": {
+				"name": "db_packet_loss",
+				"type": "limit_data",
+				"stream": "downstream",
+				"toxicity": 0.01,
+				"attributes": {
+					"bytes": 0
+				}
+			}
+		},
+		"db_timeout": {
+			"proxy": "postgres",
+			"toxic": {
+				"name": "db_timeout",
+				"type": "timeout",
+				"stream": "downstream",
+				"toxicity": 1.0,
+				"attributes": {
+					"timeout": 5000
+				}
+			}
+		},
+		"redis_latency": {
+			"proxy": "redis",
+			"toxic": {
+				"name": "redis_latency",
+				"type": "latency",
+				"stream": "downstream",
+				"toxicity": 1.0,
+				"attributes": {
+					"latency": 50,
+					"jitter": 10
+				}
+			}
+		},
+		"redis_disconnect": {
+			"proxy": "redis",
+			"toxic": {
+				"name": "redis_disconnect",
+				"type": "bandwidth",
+				"stream": "downstream",
+				"toxicity": 1.0,
+				"attributes": {
+					"rate": 0
+				}
+			}
+		}
+	}
+}

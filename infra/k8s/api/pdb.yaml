@@ -1,0 +1,16 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gbedu-api
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-api
+    app.kubernetes.io/name: gbedu-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: gbedu
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: gbedu-api

@@ -1,0 +1,204 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gbedu-ml
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: gbedu-ml
+        app.kubernetes.io/name: gbedu-ml
+        app.kubernetes.io/component: ml
+        app.kubernetes.io/part-of: gbedu
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: gbedu-ml
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 120
+      nodeSelector:
+        gpu: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: gbedu-ml
+          image: ghcr.io/nyimbi/gbedu-ml:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 4000m
+              memory: 20Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: 8000m
+              memory: 20Gi
+              nvidia.com/gpu: "1"
+          envFrom:
+            - configMapRef:
+                name: gbedu-config
+          env:
+            - name: MODEL_CACHE_DIR
+              value: /models
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: REDIS_URL
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: R2_ACCESS_KEY_ID
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: R2_SECRET_ACCESS_KEY
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: SENTRY_DSN
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 5
+            successThreshold: 1
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: models
+              mountPath: /models
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: models
+          persistentVolumeClaim:
+            claimName: gbedu-ml-models
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+      imagePullSecrets:
+        - name: ghcr-credentials
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gbedu-ml-models
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+spec:
+  type: ClusterIP
+  selector:
+    app: gbedu-ml
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: gbedu-ml

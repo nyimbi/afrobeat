@@ -1,0 +1,260 @@
+name: Deploy — Production
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/gbedu
+
+jobs:
+  # ── Build + push images ───────────────────────────────────────────────────────
+
+  build-push:
+    name: Build + push (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [api, worker, ml, web]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}-prod
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-prod
+
+  # ── Deploy to production cluster ──────────────────────────────────────────────
+
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build-push]
+    environment:
+      name: production
+      url: https://api.gbedu.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.PROD_KUBECONFIG }}
+          context: prod-cluster
+
+      - name: Extract version tag
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Set image tags in manifests
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          sed -i "s|gbedu-api:.*|${{ env.IMAGE_PREFIX }}-api:${TAG}|g" infra/k8s/api-deployment.yaml
+          sed -i "s|gbedu-worker:.*|${{ env.IMAGE_PREFIX }}-worker:${TAG}|g" infra/k8s/worker-deployment.yaml
+          sed -i "s|gbedu-ml:.*|${{ env.IMAGE_PREFIX }}-ml:${TAG}|g" infra/k8s/ml-deployment.yaml
+          sed -i "s|gbedu-web:.*|${{ env.IMAGE_PREFIX }}-web:${TAG}|g" infra/k8s/web-deployment.yaml
+
+      - name: Apply Kubernetes manifests
+        run: kubectl apply -f infra/k8s/ --context prod-cluster
+
+      - name: Rolling update — wait for completion
+        id: rollout
+        run: |
+          kubectl rollout status deployment/gbedu-api --timeout=300s
+          kubectl rollout status deployment/gbedu-worker --timeout=300s
+          kubectl rollout status deployment/gbedu-ml --timeout=600s
+          kubectl rollout status deployment/gbedu-web --timeout=300s
+
+      - name: Rollback on failure
+        if: failure() && steps.rollout.conclusion == 'failure'
+        run: |
+          echo "Rollout failed — initiating automatic rollback"
+          kubectl rollout undo deployment/gbedu-api
+          kubectl rollout undo deployment/gbedu-worker
+          kubectl rollout undo deployment/gbedu-ml
+          kubectl rollout undo deployment/gbedu-web
+          kubectl rollout status deployment/gbedu-api --timeout=180s
+          kubectl rollout status deployment/gbedu-worker --timeout=180s
+          kubectl rollout status deployment/gbedu-ml --timeout=180s
+          kubectl rollout status deployment/gbedu-web --timeout=180s
+          echo "Rollback complete"
+
+  # ── Smoke tests ───────────────────────────────────────────────────────────────
+
+  smoke-test:
+    name: Smoke test — production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [deploy]
+
+    steps:
+      - name: Wait for DNS propagation
+        run: sleep 20
+
+      - name: Health check — API
+        run: |
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://api.gbedu.com/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "API health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          echo "API health check failed after 12 attempts"
+          exit 1
+
+      - name: Health check — ML service
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://ml.gbedu.com/health || echo "000")
+          [ "$STATUS" = "200" ] || (echo "ML health check failed: $STATUS" && exit 1)
+
+      - name: Readiness probe — API
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://api.gbedu.com/ready || echo "000")
+          [ "$STATUS" = "200" ] || (echo "API readiness check failed: $STATUS" && exit 1)
+
+      - name: Rollback on smoke test failure
+        if: failure()
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.PROD_KUBECONFIG }}
+          context: prod-cluster
+
+      - name: Execute rollback
+        if: failure()
+        run: |
+          echo "Smoke test failed — rolling back production deployment"
+          kubectl rollout undo deployment/gbedu-api
+          kubectl rollout undo deployment/gbedu-worker
+          kubectl rollout undo deployment/gbedu-ml
+          kubectl rollout undo deployment/gbedu-web
+
+  # ── Post-deploy integration tests (read-only) ─────────────────────────────────
+
+  post-deploy-tests:
+    name: Post-deploy integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [smoke-test]
+
+    env:
+      TEST_BASE_URL: https://api.gbedu.com
+      TEST_READ_ONLY: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.4.18"
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-packages --frozen
+
+      - name: Run read-only integration tests against production
+        run: |
+          uv run pytest tests/integration/ \
+            -m "integration and readonly" \
+            -v --tb=short \
+            --timeout=60
+
+  # ── Notify ────────────────────────────────────────────────────────────────────
+
+  notify:
+    name: Slack notification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [post-deploy-tests]
+    if: always()
+
+    steps:
+      - name: Notify success
+        if: needs.post-deploy-tests.result == 'success'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":rocket: *Production deploy succeeded* — ${{ github.ref_name }}",
+              "attachments": [{
+                "color": "good",
+                "fields": [
+                  {"title": "Version", "value": "${{ github.ref_name }}", "short": true},
+                  {"title": "Actor", "value": "${{ github.actor }}", "short": true},
+                  {"title": "Environment", "value": "<https://api.gbedu.com|production>", "short": true},
+                  {"title": "Commit", "value": "<${{ github.event.head_commit.url }}|${{ github.sha }}>", "short": true}
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify failure
+        if: needs.post-deploy-tests.result != 'success'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":fire: *Production deploy FAILED* — ${{ github.ref_name }} — ROLLBACK MAY HAVE OCCURRED",
+              "attachments": [{
+                "color": "danger",
+                "fields": [
+                  {"title": "Version", "value": "${{ github.ref_name }}", "short": true},
+                  {"title": "Actor", "value": "${{ github.actor }}", "short": true},
+                  {"title": "Workflow run", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>", "short": true}
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

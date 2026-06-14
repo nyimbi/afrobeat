@@ -1,0 +1,252 @@
+---
+# ServiceMonitor: gbedu-api
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gbedu-api
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-api
+    app.kubernetes.io/name: gbedu-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: gbedu
+    # Label required by Prometheus Operator to discover this ServiceMonitor
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: gbedu-api
+  namespaceSelector:
+    matchNames:
+      - gbedu-prod
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      scheme: http
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - targetLabel: service
+          replacement: gbedu-api
+---
+# ServiceMonitor: gbedu-ml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: gbedu-ml
+  namespaceSelector:
+    matchNames:
+      - gbedu-prod
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 15s
+      scheme: http
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - targetLabel: service
+          replacement: gbedu-ml
+---
+# ServiceMonitor: gbedu-worker (Celery metrics exposed on :9090)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/name: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: gbedu-worker
+  namespaceSelector:
+    matchNames:
+      - gbedu-prod
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      scheme: http
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - targetLabel: service
+          replacement: gbedu-worker
+---
+# Headless service for worker metrics scraping (worker Service has no metrics port)
+apiVersion: v1
+kind: Service
+metadata:
+  name: gbedu-worker-metrics
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/name: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+spec:
+  clusterIP: None
+  selector:
+    app: gbedu-worker
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+# ServiceMonitor: gbedu-web
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gbedu-web
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-web
+    app.kubernetes.io/name: gbedu-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: gbedu
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: gbedu-web
+  namespaceSelector:
+    matchNames:
+      - gbedu-prod
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      scheme: http
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - targetLabel: service
+          replacement: gbedu-web
+---
+# PrometheusRule: Gbedu alerting rules
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gbedu-alerts
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/part-of: gbedu
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: gbedu.api
+      interval: 30s
+      rules:
+        - alert: GbeduApiHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{service="gbedu-api", status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{service="gbedu-api"}[5m])) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+            team: gbedu
+          annotations:
+            summary: "Gbẹdu API error rate > 5%"
+            description: "API 5xx rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+        - alert: GbeduApiHighLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket{service="gbedu-api"}[5m])) by (le)
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            team: gbedu
+          annotations:
+            summary: "Gbẹdu API p99 latency > 2s"
+            description: "API p99 latency is {{ $value }}s."
+
+        - alert: GbeduApiDown
+          expr: up{job="gbedu-api"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: gbedu
+          annotations:
+            summary: "Gbẹdu API is down"
+            description: "No API pods are scrape-able."
+
+    - name: gbedu.worker
+      interval: 30s
+      rules:
+        - alert: GbeduCeleryQueueBacklog
+          expr: celery_queue_depth{queue=~"audio|generation"} > 100
+          for: 10m
+          labels:
+            severity: warning
+            team: gbedu
+          annotations:
+            summary: "Celery queue backlog > 100 tasks"
+            description: "Queue {{ $labels.queue }} has {{ $value }} pending tasks."
+
+        - alert: GbeduWorkerDown
+          expr: up{job="gbedu-worker"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: gbedu
+          annotations:
+            summary: "All Gbẹdu workers are down"
+
+    - name: gbedu.ml
+      interval: 60s
+      rules:
+        - alert: GbeduMLServiceDown
+          expr: up{job="gbedu-ml"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: gbedu
+          annotations:
+            summary: "Gbẹdu ML service is down"
+            description: "No ML pods are scrape-able — generation will fail."
+
+        - alert: GbeduMLHighInferenceLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(ml_inference_duration_seconds_bucket[10m])) by (le, model)
+            ) > 30
+          for: 5m
+          labels:
+            severity: warning
+            team: gbedu
+          annotations:
+            summary: "ML inference p95 latency > 30s"
+            description: "Model {{ $labels.model }} p95 is {{ $value }}s."

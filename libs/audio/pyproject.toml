@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gbedu-audio"
+version = "0.1.0"
+description = "Gbẹdu audio — DSP, stem separation, mastering, and ML audio toolchain"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+	"gbedu-core",
+	"torch>=2.3",
+	"torchaudio>=2.3",
+	"librosa>=0.10",
+	"pydub>=0.25",
+	"demucs>=4.0",
+	"matchering>=2.0",
+	"pedalboard>=0.9",
+	"basic-pitch>=0.3",
+	"soundfile>=0.12",
+	"numpy>=1.26",
+	"scipy>=1.13",
+	"ffmpeg-python>=0.2",
+	# essentia ships pre-built wheels from their own index
+	"essentia>=2.1b6.dev1110",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gbedu_audio"]
+
+[tool.uv.sources]
+gbedu-core = { workspace = true }
+
+[[tool.uv.index]]
+name = "essentia"
+url = "https://essentia.upf.edu/python-wheels/"
+explicit = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

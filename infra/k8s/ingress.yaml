@@ -1,0 +1,157 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gbedu-tls
+  namespace: gbedu-prod
+spec:
+  secretName: gbedu-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - "xn--gbu-moa.com"
+    - "www.xn--gbu-moa.com"
+    - "api.xn--gbu-moa.com"
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ops@gbedu.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+---
+# Traefik Middleware: HTTP to HTTPS redirect
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: gbedu-prod
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+# Traefik Middleware: Rate limiting
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  namespace: gbedu-prod
+spec:
+  rateLimit:
+    average: 100
+    burst: 200
+    period: 1m
+    sourceCriterion:
+      ipStrategy:
+        depth: 1
+---
+# Traefik Middleware: Rate limiting for API (stricter)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-rate-limit
+  namespace: gbedu-prod
+spec:
+  rateLimit:
+    average: 30
+    burst: 60
+    period: 1m
+    sourceCriterion:
+      ipStrategy:
+        depth: 1
+---
+# Traefik Middleware: Security headers
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  namespace: gbedu-prod
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: true
+    stsPreload: true
+    forceSTSHeader: true
+    contentTypeNosniff: true
+    browserXssFilter: true
+    referrerPolicy: strict-origin-when-cross-origin
+    permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+    customResponseHeaders:
+      X-Frame-Options: DENY
+      X-Content-Type-Options: nosniff
+---
+# HTTP IngressRoute — redirect all HTTP to HTTPS
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gbedu-http-redirect
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/part-of: gbedu
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: "Host(`xn--gbu-moa.com`) || Host(`www.xn--gbu-moa.com`) || Host(`api.xn--gbu-moa.com`)"
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+      services:
+        - name: gbedu-web
+          port: 3000
+---
+# HTTPS IngressRoute — web frontend
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gbedu-web-https
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/part-of: gbedu
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: "Host(`xn--gbu-moa.com`) || Host(`www.xn--gbu-moa.com`)"
+      kind: Rule
+      middlewares:
+        - name: security-headers
+        - name: rate-limit
+      services:
+        - name: gbedu-web
+          port: 3000
+  tls:
+    secretName: gbedu-tls
+---
+# HTTPS IngressRoute — API backend
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gbedu-api-https
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/part-of: gbedu
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: "Host(`api.xn--gbu-moa.com`)"
+      kind: Rule
+      middlewares:
+        - name: security-headers
+        - name: api-rate-limit
+      services:
+        - name: gbedu-api
+          port: 8000
+  tls:
+    secretName: gbedu-tls

@@ -1,0 +1,53 @@
+name: gbedu
+
+services:
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/api/src:/app/src:ro
+      - ./libs/core/src:/workspace/libs/core/src:ro
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+      RELOAD: "true"
+    command: uvicorn gbedu_api.main:app --reload --host 0.0.0.0 --port 8000
+
+  worker:
+    build:
+      context: ./services/worker
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/worker/src:/app/src:ro
+      - ./libs/core/src:/workspace/libs/core/src:ro
+      - ./libs/audio/src:/workspace/libs/audio/src:ro
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    command: celery -A gbedu_worker.celery_app worker --loglevel=debug --concurrency=2 --autoreload
+
+  ml:
+    build:
+      context: ./services/ml
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/ml/src:/app/src:ro
+      - ./libs/core/src:/workspace/libs/core/src:ro
+      - ./libs/audio/src:/workspace/libs/audio/src:ro
+      - ./models:/workspace/models
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+      RELOAD: "true"
+    command: uvicorn gbedu_ml.main:app --reload --host 0.0.0.0 --port 8001
+
+  web:
+    volumes:
+      - ./services/web/src:/app/src:ro
+      - ./services/web/public:/app/public:ro
+    environment:
+      NODE_ENV: development

@@ -1,0 +1,228 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/name: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: gbedu-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: gbedu-worker
+        app.kubernetes.io/name: gbedu-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: gbedu
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: gbedu-worker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 120
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: gbedu-worker
+                topologyKey: topology.kubernetes.io/zone
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: gbedu-worker
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: gbedu-worker
+          image: ghcr.io/nyimbi/gbedu-worker:latest
+          imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 4Gi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+          envFrom:
+            - configMapRef:
+                name: gbedu-config
+          env:
+            - name: CELERY_CONCURRENCY
+              value: "4"
+            - name: CELERY_QUEUES
+              value: "audio,generation,default"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: REDIS_URL
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: R2_ACCESS_KEY_ID
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: R2_SECRET_ACCESS_KEY
+            - name: ML_SERVICE_URL
+              value: "http://gbedu-ml:8001"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gbedu-secrets
+                  key: SENTRY_DSN
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - celery -A gbedu_worker inspect ping -d celery@$HOSTNAME --timeout 10
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - celery -A gbedu_worker inspect ping -d celery@$HOSTNAME --timeout 10
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 15
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - celery -A gbedu_worker control shutdown && sleep 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: audio-scratch
+              mountPath: /scratch
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: audio-scratch
+          emptyDir:
+            sizeLimit: 10Gi
+      imagePullSecrets:
+        - name: ghcr-credentials
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/name: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gbedu-worker
+  minReplicas: 5
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+    - type: Pods
+      pods:
+        metric:
+          name: celery_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "10"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 3
+          periodSeconds: 60
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+      selectPolicy: Max
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: gbedu-worker

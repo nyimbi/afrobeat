@@ -1,0 +1,75 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gbedu-config
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/name: gbedu
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: gbedu
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+
+  FRONTEND_URL: "https://xn--gbu-moa.com"
+  NEXT_PUBLIC_API_URL: "https://api.xn--gbu-moa.com"
+  NEXT_PUBLIC_R2_PUBLIC_URL: "https://cdn.xn--gbu-moa.com"
+
+  ALLOWED_ORIGINS: "https://xn--gbu-moa.com,https://www.xn--gbu-moa.com"
+
+  # Rate limiting (requests per minute per IP)
+  RATE_LIMIT_FREE: "10"
+  RATE_LIMIT_PRO: "60"
+  RATE_LIMIT_ENTERPRISE: "300"
+
+  # Generation quotas (tracks per month)
+  QUOTA_FREE: "5"
+  QUOTA_PRO: "100"
+  QUOTA_ENTERPRISE: "unlimited"
+
+  # Audio processing
+  MAX_AUDIO_DURATION_SECONDS: "300"
+  MAX_UPLOAD_SIZE_MB: "50"
+  SUPPORTED_AUDIO_FORMATS: "mp3,wav,flac,ogg,m4a"
+
+  # ML service
+  ML_SERVICE_URL: "http://gbedu-ml.gbedu-prod.svc.cluster.local:8001"
+  ML_REQUEST_TIMEOUT_SECONDS: "120"
+  ML_MAX_RETRIES: "3"
+
+  # Storage
+  R2_BUCKET_NAME: "gbedu-prod"
+  R2_ENDPOINT_URL: "https://account-id.r2.cloudflarestorage.com"
+  R2_PUBLIC_URL: "https://cdn.xn--gbu-moa.com"
+
+  # Database pool
+  DB_POOL_SIZE: "10"
+  DB_MAX_OVERFLOW: "20"
+  DB_POOL_TIMEOUT: "30"
+  DB_POOL_RECYCLE: "3600"
+
+  # Redis
+  REDIS_MAX_CONNECTIONS: "50"
+  REDIS_SOCKET_TIMEOUT: "5"
+
+  # Celery
+  CELERY_TASK_SOFT_TIME_LIMIT: "300"
+  CELERY_TASK_TIME_LIMIT: "360"
+  CELERY_MAX_TASKS_PER_CHILD: "100"
+
+  # OpenTelemetry
+  OTEL_SERVICE_NAME: "gbedu-api"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
+  OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
+
+  # Sentry
+  SENTRY_ENVIRONMENT: "production"
+  SENTRY_TRACES_SAMPLE_RATE: "0.1"
+
+  # Feature flags
+  FEATURE_STEMS_SEPARATION: "true"
+  FEATURE_MIDI_EXPORT: "true"
+  FEATURE_COLLABORATION: "false"

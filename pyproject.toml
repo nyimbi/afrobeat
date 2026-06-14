@@ -1,9 +1,79 @@
 [build-system]
-# AVOID CHANGING REQUIRES: IT WILL BE UPDATED BY PYSCAFFOLD!
-requires = ["setuptools>=46.1.0", "setuptools_scm[toml]>=5"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.setuptools_scm]
-# For smarter version schemes and other configuration options,
-# check out https://github.com/pypa/setuptools_scm
-version_scheme = "no-guess-dev"
+[project]
+name = "gbedu"
+version = "0.1.0"
+description = "Gbẹdu — production-grade AI Afrobeats music generator platform"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "Nyimbi Odero", email = "nyimbi@example.com" }]
+
+[tool.uv.workspace]
+members = [
+	"libs/core",
+	"libs/audio",
+	"services/api",
+	"services/worker",
+	"services/ml",
+]
+
+[tool.uv]
+dev-dependencies = [
+	"pytest>=8.2",
+	"pytest-asyncio>=0.23",
+	"pytest-httpserver>=1.1",
+	"httpx>=0.27",
+	"ruff>=0.4",
+	"pyright>=1.1.370",
+	"mypy>=1.10",
+	"coverage[toml]>=7.5",
+	"pytest-cov>=5.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+indent-width = 4
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "PT", "SIM", "TCH", "ANN"]
+ignore = ["ANN101", "ANN102", "ANN401", "E501"]
+
+[tool.ruff.format]
+indent-style = "tab"
+quote-style = "double"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingImports = true
+reportMissingTypeStubs = false
+venvPath = "."
+venv = ".venv"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests", "libs/audio/tests", "services/ml/tests"]
+addopts = "-v --tb=short --import-mode=importlib"
+
+[tool.coverage.run]
+source = ["libs", "services"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+	"pragma: no cover",
+	"def __repr__",
+	"if TYPE_CHECKING:",
+	"raise NotImplementedError",
+]

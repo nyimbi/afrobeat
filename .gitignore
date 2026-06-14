@@ -1,54 +1,138 @@
-# Temporary and binary files
-*~
-*.py[cod]
-*.so
-*.cfg
-!.isort.cfg
-!setup.cfg
-*.orig
-*.log
-*.pot
-__pycache__/*
-.cache/*
-.*.swp
-*/.ipynb_checkpoints/*
-.DS_Store
+# Environment
+.env
+.env.*
+!.env.example
 
-# Project files
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+*.orig
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+MANIFEST
+.installed.cfg
+lib/
+lib64/
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+ENV/
+env/
+.conda*/
+
+# UV
+.uv/
+uv.lock
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+junit*.xml
+.tox/
+cover/
+
+# Type checking / linting
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# IDEs
+.idea/
+.vscode/
 .ropeproject
 .project
 .pydevproject
 .settings
-.idea
-.vscode
+*.swp
+*.swo
+.*.swp
+*~
+.DS_Store
+Thumbs.db
 tags
 
-# Package files
-*.egg
-*.eggs/
-.installed.cfg
-*.egg-info
+# Jupyter
+*/.ipynb_checkpoints/*
 
-# Unittest and coverage
-htmlcov/*
-.coverage
-.coverage.*
-.tox
-junit*.xml
-coverage.xml
-.pytest_cache/
+# Node / Next.js
+node_modules/
+.next/
+.nuxt/
+out/
+.turbo/
+.vercel/
 
-# Build and docs folder/files
-build/*
-dist/*
-sdist/*
-docs/api/*
-docs/_rst/*
-docs/_build/*
-cover/*
-MANIFEST
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
 
-# Per-project virtualenvs
-.venv*/
-.conda*/
-.python-version
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Audio (temporary generated files — stored in R2, not git)
+*.wav
+*.mp3
+*.flac
+*.aiff
+*.ogg
+*.m4a
+tmp_audio/
+generated/
+
+# ML model weights (large binaries — fetched from HuggingFace at runtime)
+models/
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.bin
+*.onnx
+
+# Docker local data
+.docker/
+
+# Monitoring data volumes
+infra/monitoring/grafana/data/
+infra/monitoring/prometheus/data/
+
+# API docs build
+docs/api/
+docs/_rst/
+docs/_build/
+
+# Config exceptions
+!setup.cfg
+!.isort.cfg
+
+# Misc
+*.pid
+*.seed
+*.pid.lock
+.cache/
+.pot
+.omc/state/
+*.omc.jsonl

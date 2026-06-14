@@ -1,0 +1,219 @@
+---
+# ServiceAccount: gbedu-api
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gbedu-api
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-api
+    app.kubernetes.io/name: gbedu-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: gbedu
+automountServiceAccountToken: false
+---
+# Role: gbedu-api — read its own configmap and secret (via projected volume if needed)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gbedu-api
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-api
+    app.kubernetes.io/part-of: gbedu
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["gbedu-config"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gbedu-api
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-api
+    app.kubernetes.io/part-of: gbedu
+subjects:
+  - kind: ServiceAccount
+    name: gbedu-api
+    namespace: gbedu-prod
+roleRef:
+  kind: Role
+  name: gbedu-api
+  apiGroup: rbac.authorization.k8s.io
+---
+# ServiceAccount: gbedu-ml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/part-of: gbedu
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["gbedu-config"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/part-of: gbedu
+subjects:
+  - kind: ServiceAccount
+    name: gbedu-ml
+    namespace: gbedu-prod
+roleRef:
+  kind: Role
+  name: gbedu-ml
+  apiGroup: rbac.authorization.k8s.io
+---
+# ServiceAccount: gbedu-worker
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/name: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/part-of: gbedu
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["gbedu-config"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/part-of: gbedu
+subjects:
+  - kind: ServiceAccount
+    name: gbedu-worker
+    namespace: gbedu-prod
+roleRef:
+  kind: Role
+  name: gbedu-worker
+  apiGroup: rbac.authorization.k8s.io
+---
+# ServiceAccount: gbedu-web
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gbedu-web
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-web
+    app.kubernetes.io/name: gbedu-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: gbedu
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gbedu-web
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-web
+    app.kubernetes.io/part-of: gbedu
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["gbedu-config"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gbedu-web
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-web
+    app.kubernetes.io/part-of: gbedu
+subjects:
+  - kind: ServiceAccount
+    name: gbedu-web
+    namespace: gbedu-prod
+roleRef:
+  kind: Role
+  name: gbedu-web
+  apiGroup: rbac.authorization.k8s.io
+---
+# ServiceAccount: gbedu-cronjob
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gbedu-cronjob
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: gbedu
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gbedu-cronjob
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: gbedu
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["gbedu-config"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gbedu-cronjob
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: gbedu
+subjects:
+  - kind: ServiceAccount
+    name: gbedu-cronjob
+    namespace: gbedu-prod
+roleRef:
+  kind: Role
+  name: gbedu-cronjob
+  apiGroup: rbac.authorization.k8s.io

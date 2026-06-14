@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400;1,700&family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Sora:wght@300;400;500;600;700&display=swap');
+
+@layer base {
+	:root {
+		--background: 240 10% 4%;
+		--foreground: 40 60% 92%;
+
+		--card: 240 8% 9%;
+		--card-foreground: 40 60% 92%;
+
+		--popover: 240 8% 9%;
+		--popover-foreground: 40 60% 92%;
+
+		--primary: 43 65% 52%;
+		--primary-foreground: 240 10% 4%;
+
+		--secondary: 270 60% 40%;
+		--secondary-foreground: 40 60% 92%;
+
+		--muted: 240 6% 15%;
+		--muted-foreground: 240 5% 55%;
+
+		--accent: 43 65% 52%;
+		--accent-foreground: 240 10% 4%;
+
+		--destructive: 0 65% 42%;
+		--destructive-foreground: 40 60% 92%;
+
+		--border: 240 6% 16%;
+		--input: 240 6% 14%;
+		--ring: 43 65% 52%;
+
+		--radius: 0.625rem;
+
+		--font-display: 'Playfair Display', serif;
+		--font-sans: 'Sora', system-ui, sans-serif;
+		--font-mono: 'DM Mono', monospace;
+	}
+}
+
+@layer base {
+	* {
+		@apply border-border;
+		box-sizing: border-box;
+	}
+
+	html {
+		scroll-behavior: smooth;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
+
+	body {
+		@apply bg-dark-bg-primary text-foreground;
+		font-family: var(--font-sans);
+		font-feature-settings: "rlig" 1, "calt" 1;
+		background-color: #0A0A0F;
+		min-height: 100dvh;
+	}
+
+	/* Scrollbar styling */
+	::-webkit-scrollbar {
+		width: 4px;
+		height: 4px;
+	}
+	::-webkit-scrollbar-track {
+		background: #12121A;
+	}
+	::-webkit-scrollbar-thumb {
+		background: #D4AF3766;
+		border-radius: 2px;
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background: #D4AF37;
+	}
+
+	/* Selection */
+	::selection {
+		background: rgba(212, 175, 55, 0.25);
+		color: #FAF5E0;
+	}
+}
+
+@layer utilities {
+	.font-display {
+		font-family: var(--font-display);
+	}
+
+	.font-mono {
+		font-family: var(--font-mono);
+	}
+
+	/* Adire-inspired geometric texture overlay */
+	.adire-texture {
+		background-image:
+			repeating-linear-gradient(
+				45deg,
+				transparent,
+				transparent 20px,
+				rgba(212, 175, 55, 0.018) 20px,
+				rgba(212, 175, 55, 0.018) 21px
+			),
+			repeating-linear-gradient(
+				-45deg,
+				transparent,
+				transparent 20px,
+				rgba(212, 175, 55, 0.018) 20px,
+				rgba(212, 175, 55, 0.018) 21px
+			);
+	}
+
+	/* Noise grain overlay */
+	.grain-overlay::after {
+		content: '';
+		position: fixed;
+		top: 0; left: 0; right: 0; bottom: 0;
+		background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+		pointer-events: none;
+		z-index: 9999;
+		opacity: 0.35;
+	}
+
+	/* Gold glow text */
+	.text-gold-glow {
+		text-shadow: 0 0 40px rgba(212, 175, 55, 0.4), 0 0 80px rgba(212, 175, 55, 0.15);
+	}
+
+	/* Shimmer skeleton */
+	.skeleton {
+		background: linear-gradient(
+			90deg,
+			rgba(255,255,255,0.03) 0%,
+			rgba(255,255,255,0.07) 50%,
+			rgba(255,255,255,0.03) 100%
+		);
+		background-size: 200% 100%;
+		animation: shimmer 2s linear infinite;
+	}
+
+	@keyframes shimmer {
+		0% { background-position: -200% 0; }
+		100% { background-position: 200% 0; }
+	}
+
+	/* Waveform bar animation */
+	.waveform-bar {
+		display: inline-block;
+		width: 3px;
+		background: #D4AF37;
+		border-radius: 2px;
+		animation: waveform 1.2s ease-in-out infinite;
+	}
+
+	@keyframes waveform {
+		0%, 100% { transform: scaleY(0.3); }
+		50% { transform: scaleY(1); }
+	}
+
+	/* Pulsing gold ring */
+	@keyframes pulse-gold {
+		0%, 100% { box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.4); }
+		50% { box-shadow: 0 0 0 10px rgba(212, 175, 55, 0); }
+	}
+
+	.animate-pulse-gold {
+		animation: pulse-gold 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+	}
+
+	/* Reveal animation for staggered entry */
+	@keyframes reveal-up {
+		from {
+			opacity: 0;
+			transform: translateY(24px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.reveal-up {
+		animation: reveal-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+	}
+
+	/* Glass morphism panel */
+	.glass {
+		background: rgba(255, 255, 255, 0.03);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		border: 1px solid rgba(255, 255, 255, 0.07);
+	}
+
+	.glass-gold {
+		background: rgba(212, 175, 55, 0.04);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		border: 1px solid rgba(212, 175, 55, 0.15);
+	}
+
+	/* Focus ring override */
+	.focus-gold:focus-visible {
+		outline: none;
+		box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.6);
+	}
+}

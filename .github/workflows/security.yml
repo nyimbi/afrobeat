@@ -1,0 +1,175 @@
+name: Security — Scheduled Scan
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: security-scan
+  cancel-in-progress: true
+
+jobs:
+  # ── CodeQL analysis ───────────────────────────────────────────────────────────
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # ── SBOM generation ───────────────────────────────────────────────────────────
+
+  sbom:
+    name: SBOM generation (syft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM — Python workspace
+        run: syft dir:. -o spdx-json=sbom-python.spdx.json --exclude ".git" --exclude ".venv"
+
+      - name: Generate SBOM — web (npm)
+        run: syft dir:services/web -o spdx-json=sbom-web.spdx.json
+
+      - name: Upload SBOMs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.run_id }}
+          path: |
+            sbom-python.spdx.json
+            sbom-web.spdx.json
+          retention-days: 90
+
+  # ── Dependency vulnerability scan (grype) ────────────────────────────────────
+
+  grype:
+    name: Dependency vulnerability scan (grype)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      contents: read
+    needs: [sbom]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download SBOM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom-${{ github.run_id }}
+
+      - name: Install grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Scan Python SBOM with grype
+        run: |
+          grype sbom:sbom-python.spdx.json \
+            --fail-on high \
+            -o sarif > grype-python.sarif || true
+
+      - name: Scan web SBOM with grype
+        run: |
+          grype sbom:sbom-web.spdx.json \
+            --fail-on high \
+            -o sarif > grype-web.sarif || true
+
+      - name: Upload grype SARIF (Python)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: grype-python.sarif
+          category: grype-python
+        continue-on-error: true
+
+      - name: Upload grype SARIF (web)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: grype-web.sarif
+          category: grype-web
+        continue-on-error: true
+
+  # ── Secret scanning (trufflehog) ──────────────────────────────────────────────
+
+  secret-scan:
+    name: Secret scan (trufflehog)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog OSS scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+
+  # ── Notify on findings ────────────────────────────────────────────────────────
+
+  notify:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [codeql, sbom, grype, secret-scan]
+    if: failure()
+
+    steps:
+      - name: Slack alert
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":warning: *Daily security scan found issues*",
+              "attachments": [{
+                "color": "warning",
+                "fields": [
+                  {"title": "Workflow run", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View details>", "short": false}
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

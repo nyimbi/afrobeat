@@ -1,0 +1,256 @@
+---
+# CronJob: cleanup-temp-files — purge R2 temp objects older than 24h (hourly)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanup-temp-files
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/name: cleanup-temp-files
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: gbedu
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cleanup-temp-files
+            app.kubernetes.io/component: cronjob
+            app.kubernetes.io/part-of: gbedu
+        spec:
+          serviceAccountName: gbedu-cronjob
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: cleanup-temp-files
+              image: ghcr.io/nyimbi/gbedu-worker:latest
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - gbedu_worker.management.cleanup_temp_files
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              envFrom:
+                - configMapRef:
+                    name: gbedu-config
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: DATABASE_URL
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: REDIS_URL
+                - name: R2_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: R2_ACCESS_KEY_ID
+                - name: R2_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: R2_SECRET_ACCESS_KEY
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          imagePullSecrets:
+            - name: ghcr-credentials
+---
+# CronJob: reset-generation-counts — zero per-user daily generation counters (midnight UTC)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reset-generation-counts
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/name: reset-generation-counts
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: gbedu
+spec:
+  schedule: "0 0 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: reset-generation-counts
+            app.kubernetes.io/component: cronjob
+            app.kubernetes.io/part-of: gbedu
+        spec:
+          serviceAccountName: gbedu-cronjob
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reset-generation-counts
+              image: ghcr.io/nyimbi/gbedu-worker:latest
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - gbedu_worker.management.reset_generation_counts
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              envFrom:
+                - configMapRef:
+                    name: gbedu-config
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: DATABASE_URL
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: REDIS_URL
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          imagePullSecrets:
+            - name: ghcr-credentials
+---
+# CronJob: metrics-rollup — aggregate raw event rows into hourly summary tables (every 6h)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: metrics-rollup
+  namespace: gbedu-prod
+  labels:
+    app.kubernetes.io/name: metrics-rollup
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: gbedu
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: metrics-rollup
+            app.kubernetes.io/component: cronjob
+            app.kubernetes.io/part-of: gbedu
+        spec:
+          serviceAccountName: gbedu-cronjob
+          automountServiceAccountToken: false
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: metrics-rollup
+              image: ghcr.io/nyimbi/gbedu-worker:latest
+              imagePullPolicy: Always
+              command:
+                - python
+                - -m
+                - gbedu_worker.management.metrics_rollup
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+              envFrom:
+                - configMapRef:
+                    name: gbedu-config
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: DATABASE_URL
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: gbedu-secrets
+                      key: REDIS_URL
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          imagePullSecrets:
+            - name: ghcr-credentials

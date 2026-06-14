@@ -1,0 +1,142 @@
+groups:
+  - name: gbedu.generation
+    interval: 30s
+    rules:
+      # ── GenerationLatencyHigh ──────────────────────────────────────────────
+      # P95 generation latency above 120 s sustained for 5 min → warning.
+      # This fires before users notice systemic slowdowns.
+      - alert: GenerationLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            rate(gbedu_generation_duration_seconds_bucket[5m])
+          ) > 120
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Generation P95 latency is above 120 s"
+          description: >
+            P95 generation latency is {{ $value | humanizeDuration }} (threshold: 120 s).
+            Check ML service load, GPU memory pressure, or queue depth.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/generation-latency.md
+
+      # ── GenerationFailureRate ──────────────────────────────────────────────
+      # More than 5 % of generation tasks erroring over a 5-min window → critical.
+      - alert: GenerationFailureRate
+        expr: |
+          (
+            rate(gbedu_generation_errors_total[5m])
+            /
+            rate(gbedu_generation_requests_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Generation failure rate above 5 %"
+          description: >
+            {{ $value | humanizePercentage }} of generation tasks are failing.
+            Investigate worker logs, ML service errors, or storage failures.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/generation-failures.md
+
+  - name: gbedu.infrastructure
+    interval: 15s
+    rules:
+      # ── MLServiceDown ──────────────────────────────────────────────────────
+      - alert: MLServiceDown
+        expr: up{job="gbedu_ml"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "ML inference service is unreachable"
+          description: >
+            The ML service ({{ $labels.instance }}) has been unreachable for > 1 min.
+            All generation requests will fail. Restart or redeploy the ml container.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/ml-service-down.md
+
+      # ── APIHighErrorRate ───────────────────────────────────────────────────
+      - alert: APIHighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{job="gbedu_api",status=~"5.."}[5m])
+            /
+            rate(http_requests_total{job="gbedu_api"}[5m])
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "API 5xx error rate above 1 %"
+          description: >
+            {{ $value | humanizePercentage }} of API requests are returning 5xx.
+            Check api service logs, database connectivity, and upstream ML service health.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/api-error-rate.md
+
+      # ── DiskSpaceLow ──────────────────────────────────────────────────────
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!="tmpfs",fstype!="overlay"}
+            /
+            node_filesystem_size_bytes{fstype!="tmpfs",fstype!="overlay"}
+          ) < 0.20
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Disk space below 20 % on {{ $labels.instance }}"
+          description: >
+            {{ $value | humanizePercentage }} free on {{ $labels.mountpoint }}.
+            Free space or expand the volume before service disruption.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/disk-space.md
+
+  - name: gbedu.gpu
+    interval: 30s
+    rules:
+      # ── GPUMemoryHigh ──────────────────────────────────────────────────────
+      # NVIDIA DCGM exporter metric; falls back to custom gbedu_gpu_memory_used_bytes.
+      - alert: GPUMemoryHigh
+        expr: |
+          (
+            DCGM_FI_DEV_MEM_COPY_UTIL
+            or
+            (
+              gbedu_gpu_memory_used_bytes
+              /
+              gbedu_gpu_memory_total_bytes
+              * 100
+            )
+          ) > 90
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "GPU VRAM usage above 90 % on {{ $labels.instance }}"
+          description: >
+            {{ $value }}% VRAM utilisation. Model loading or concurrent inference
+            may cause OOM. Consider reducing concurrency or adding a second GPU.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/gpu-memory.md
+
+  - name: gbedu.queue
+    interval: 15s
+    rules:
+      # ── QueueDepthHigh ────────────────────────────────────────────────────
+      - alert: QueueDepthHigh
+        expr: gbedu_celery_queue_length > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Celery queue depth above 100 tasks"
+          description: >
+            Queue depth is {{ $value }} tasks. Workers may be overloaded or stuck.
+            Check worker logs, ML service health, and consider scaling workers.
+          runbook_url: https://github.com/nyimbi/afrobeat/blob/main/docs/runbooks/queue-depth.md

@@ -1,0 +1,20 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gbedu-prod
+  labels:
+    name: gbedu-prod
+    environment: production
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    scheduler.alpha.kubernetes.io/node-selector: ""
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gbedu-staging
+  labels:
+    name: gbedu-staging
+    environment: staging
+    app.kubernetes.io/managed-by: kubectl
