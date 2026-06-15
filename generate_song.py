@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Standalone Afrobeats song generator.
+"""Standalone Afrobeats / Congolese song generator.
 
 Two modes:
   Instrumental  — facebook/musicgen-* via HuggingFace transformers (fast, no vocals)
   Vocals        — ACE-Step 1.5 (full song with real singing, slower)
 
+Styles:
+  choir             Afrobeats SATB gospel choir (Nigerian, Pidgin/Yoruba/English)
+  solo              Afrobeats solo vocalist
+  duet              Afrobeats male/female duet
+  congolese-choir   Congolese Afro-rumba choir (Fally Ipupa style, English)
+  soukous           Fast Congolese soukous/ndombolo (145 BPM, English)
+
 Usage:
     python generate_song.py [--model small|medium|large] [--duration 30]
-    python generate_song.py --vocals [--style choir|solo|duet] [--language english|pidgin|yoruba]
-    python generate_song.py --vocals --lyrics "custom lyrics here" --prompt "custom prompt"
-    python generate_song.py --vocals --style choir --fast   # 20 inference steps, ~10 min on CPU
+    python generate_song.py --vocals [--style choir|solo|duet|congolese-choir|soukous]
+    python generate_song.py --vocals --style congolese-choir --duration 60
+    python generate_song.py --vocals --style soukous --fast
+    python generate_song.py --vocals --lyrics "custom lyrics" --prompt "custom prompt"
 """
 from __future__ import annotations
 
@@ -207,6 +215,115 @@ Take me there, take me there
 Where the music full the air
 """,
     },
+    # ── Congolese styles ─────────────────────────────────────────────────────
+    # Afro-rumba choir in Fally Ipupa style — 90 BPM, SATB harmonies,
+    # lead soloist + full choir call-response, sebene guitar break.
+    "congolese-choir": {
+        "english": """\
+[verse]
+I'm calling out across the water tonight
+My heart is heavy but my soul wants to fight
+From Kinshasa to the world I raise my voice
+The rhythm of the Congo is my only choice
+
+[chorus]
+Mayday mayday hear my prayer tonight
+Choir: Mayday, we are here
+Mayday mayday bring us to the light
+Choir: Mayday, do not fear
+We are rising we are never going down
+Choir: Rising, rising
+From the river to the mountains and the town
+Choir: Never stop, never stop
+
+[verse]
+The guitar starts to sing and the bass rolls low
+The ancestors are dancing in the evening glow
+Brass horns rising up like a morning sun
+This Congolese rumba says we all are one
+
+[chorus]
+Mayday mayday hear my prayer tonight
+Choir: Mayday, we are here
+Mayday mayday bring us to the light
+Choir: Mayday, do not fear
+We are rising we are never going down
+Choir: Rising, rising
+From the river to the mountains and the town
+Choir: Never stop, never stop
+
+[bridge]
+Hey hey hey
+Choir: Hey
+We keep moving forward
+Choir: Forward
+Nothing can stop us now
+Choir: Nothing now
+The sebene calls us all to dance
+This is our moment, this is our chance
+Hey hey hey
+Choir: Mayday o
+
+[outro]
+Hear us calling
+Choir: Mayday o
+We are calling
+Choir: Mayday o
+From the Congo to the world
+Choir: Mayday, mayday o
+""",
+    },
+    # Soukous / Ndombolo — fast 145 BPM, rapid sebene guitar, atalaku shouts,
+    # short punchy verses, designed to make the dance floor erupt.
+    "soukous": {
+        "english": """\
+[verse]
+The guitar is on fire tonight
+My feet cannot stop moving right
+Everybody on the floor
+Kinshasa sound you can't ignore
+
+[chorus]
+Dance dance let the soukous flow
+Choir: Soukous, let it go
+Move move feel the sebene glow
+Choir: Sebene, high and low
+Ey ey ey the music takes control
+Ey ey ey it's living in my soul
+
+[verse]
+The atalaku calls the crowd
+Brass section playing way too loud
+Bass guitar is walking fast
+This Congolese groove is built to last
+
+[chorus]
+Dance dance let the soukous flow
+Choir: Soukous, let it go
+Move move feel the sebene glow
+Choir: Sebene, high and low
+Ey ey ey the music takes control
+Ey ey ey it's living in my soul
+
+[bridge]
+Ey ey ey
+Choir: Ey
+Sebene time
+Choir: Sebene
+Guitar guitar guitar
+Choir: Play it
+Everybody wave your hands
+Choir: Hands up
+Nobody sits when soukous lands
+Ey ey ey ey
+
+[outro]
+Soukous soukous
+Choir: Ey ey
+Soukous soukous
+Choir: Don't stop now
+""",
+    },
     "duet": {
         "english": """\
 [verse]
@@ -269,6 +386,20 @@ _PROMPTS: dict[str, str] = {
         "talking drum, acoustic guitar, gentle shekere, lush strings, "
         "romantic and soulful, Afrofusion ballad style"
     ),
+    "congolese-choir": (
+        "Congolese Afro-rumba choir anthem in the style of Fally Ipupa, 90 BPM, "
+        "SATB gospel choir with powerful lead soloist, call-and-response between "
+        "soloist and full choir, sebene electric guitar riff, walking bass guitar, "
+        "congas and bougarabou drums, trumpet and trombone brass section, "
+        "lush choir harmonies, deeply emotional and uplifting, Kinshasa sound, "
+        "professional studio production, English lyrics"
+    ),
+    "soukous": (
+        "Fast Congolese soukous ndombolo, 145 BPM, rapid syncopated sebene electric "
+        "guitar riff, rhythm guitar comping, driving walking bass, tumba and conga "
+        "polyrhythmic percussion, atalaku vocal shouts, brass stabs, "
+        "high-energy dance floor, Kinshasa club sound, English lyrics"
+    ),
 }
 
 # Instrumental prompt library
@@ -291,6 +422,15 @@ _INSTRUMENTAL_PROMPTS = [
     (
         "Alte indie Afrobeats, 95 BPM, lo-fi drum machine, plucked kora, synthesizer pads, "
         "reverb-heavy guitar, dreamy vocal texture, Lagos alternative scene, midnight vibes"
+    ),
+    (
+        "Congolese Afro-rumba instrumental, 90 BPM, sebene electric guitar riff, "
+        "walking bass, congas and bougarabou percussion, trumpet and trombone, "
+        "rhythm guitar comping, Kinshasa sound, Fally Ipupa style"
+    ),
+    (
+        "Soukous ndombolo instrumental, 145 BPM, rapid sebene guitar, polyrhythmic "
+        "tumba and conga drums, walking bass, brass stabs, Congolese dance music"
     ),
 ]
 
@@ -444,11 +584,14 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python generate_song.py                                  # instrumental, medium model
-  python generate_song.py --model large --duration 45      # longer, higher quality
-  python generate_song.py --vocals                         # choir vocals, English, 30s
+  python generate_song.py                                         # instrumental, medium model
+  python generate_song.py --model large --duration 45             # longer, higher quality
+  python generate_song.py --vocals                                # Afrobeats choir, English, 30s
   python generate_song.py --vocals --style choir --language pidgin --duration 60
-  python generate_song.py --vocals --style solo --fast     # quick test, 20 steps
+  python generate_song.py --vocals --style solo --fast            # quick test, 20 steps
+  python generate_song.py --vocals --style congolese-choir        # Fally Ipupa style choir
+  python generate_song.py --vocals --style congolese-choir --duration 60 --steps 60
+  python generate_song.py --vocals --style soukous --fast         # fast ndombolo
   python generate_song.py --vocals --lyrics "$(cat my_lyrics.txt)"
 """,
     )
@@ -468,7 +611,7 @@ Examples:
     voc.add_argument("--vocals", action="store_true",
                      help="Use ACE-Step for full song with real singing")
     voc.add_argument("--style", default="choir",
-                     choices=["choir", "solo", "duet"],
+                     choices=["choir", "solo", "duet", "congolese-choir", "soukous"],
                      help="Vocal arrangement (default: choir)")
     voc.add_argument("--language", default="english",
                      choices=["english", "pidgin", "yoruba"],
