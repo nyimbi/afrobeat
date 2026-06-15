@@ -168,8 +168,10 @@ async def stripe_webhook(
 	event_id = event["id"]
 	idempotency_key = f"{_STRIPE_EVENT_IDEMPOTENCY_PREFIX}{event_id}"
 
-	already_processed = await redis.exists(idempotency_key)
-	if already_processed:
+	# Atomic SET NX — closes the TOCTOU race that exists() → setex() leaves open.
+	# Returns True if we just claimed the key, None/False if already claimed.
+	claimed = await redis.set(idempotency_key, "processing", nx=True, ex=_IDEMPOTENCY_TTL)
+	if not claimed:
 		log.info("stripe.webhook.duplicate", event_id=event_id, event_type=event["type"])
 		return {"status": "already_processed"}
 
@@ -179,9 +181,13 @@ async def stripe_webhook(
 	try:
 		await _handle_stripe_event(event, db)
 	except Exception as exc:
+		# Release claim so Stripe can retry delivery.
+		await redis.delete(idempotency_key)
 		log.error("stripe.webhook.handler_error", event_id=event_id, error=str(exc))
 		raise HTTPException(status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)})
 
+	# Overwrite "processing" → "1" so future duplicates are rejected even after a pod restart
+	# that cleared the key mid-flight (the NX set would have re-acquired there, which is fine).
 	await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 	return {"status": "ok"}
 
@@ -450,30 +456,35 @@ async def paystack_verify(
 	ps_status = data["status"]
 
 	if ps_status == "success":
-		payment = Payment(
-			id=uuid7str(),
-			user_id=user.id,
-			provider=PaymentProvider.paystack,
-			provider_payment_id=reference,
-			status=PaymentStatus.succeeded,
-			amount_minor=data["amount"],
-			currency=data["currency"],
-			paid_at=datetime.now(timezone.utc),
+		# Idempotency guard — the frontend may call verify multiple times on success.
+		existing = await db.execute(
+			select(Payment).where(Payment.provider_payment_id == reference)
 		)
-		db.add(payment)
+		if existing.scalar_one_or_none() is None:
+			payment = Payment(
+				id=uuid7str(),
+				user_id=user.id,
+				provider=PaymentProvider.paystack,
+				provider_payment_id=reference,
+				status=PaymentStatus.succeeded,
+				amount_minor=data["amount"],
+				currency=data["currency"],
+				paid_at=datetime.now(timezone.utc),
+			)
+			db.add(payment)
 
-		meta = data.get("metadata", {})
-		tier_str = meta.get("tier")
-		if tier_str:
-			try:
-				user.subscription_tier = SubscriptionTier(tier_str)
-				user.subscription_status = SubscriptionStatus.active
-				user.paystack_customer_code = data.get("customer", {}).get("customer_code")
-				db.add(user)
-			except ValueError:
-				pass
+			meta = data.get("metadata", {})
+			tier_str = meta.get("tier")
+			if tier_str:
+				try:
+					user.subscription_tier = SubscriptionTier(tier_str)
+					user.subscription_status = SubscriptionStatus.active
+					user.paystack_customer_code = data.get("customer", {}).get("customer_code")
+					db.add(user)
+				except ValueError:
+					pass
 
-		await db.flush()
+			await db.flush()
 
 	return PaystackVerifyResponse(
 		status=ps_status,
@@ -515,42 +526,48 @@ async def paystack_webhook(
 	event_ref = event.get("data", {}).get("reference", "")
 	idempotency_key = f"{_PAYSTACK_EVENT_IDEMPOTENCY_PREFIX}{event_ref}"
 
-	if await redis.exists(idempotency_key):
+	claimed = await redis.set(idempotency_key, "processing", nx=True, ex=_IDEMPOTENCY_TTL)
+	if not claimed:
 		return {"status": "already_processed"}
 
 	event_type = event.get("event", "")
 	log.info("paystack.webhook.received", event_type=event_type, reference=event_ref)
 
-	if event_type == "charge.success":
-		data = event["data"]
-		meta = data.get("metadata", {})
-		user_id = meta.get("user_id")
-		if user_id:
-			result = await db.execute(select(User).where(User.id == user_id))
-			user = result.scalar_one_or_none()
-			if user:
-				tier_str = meta.get("tier")
-				if tier_str:
-					try:
-						user.subscription_tier = SubscriptionTier(tier_str)
-						user.subscription_status = SubscriptionStatus.active
-						user.paystack_customer_code = data.get("customer", {}).get("customer_code")
-						db.add(user)
-					except ValueError:
-						pass
+	try:
+		if event_type == "charge.success":
+			data = event["data"]
+			meta = data.get("metadata", {})
+			user_id = meta.get("user_id")
+			if user_id:
+				result = await db.execute(select(User).where(User.id == user_id))
+				user = result.scalar_one_or_none()
+				if user:
+					tier_str = meta.get("tier")
+					if tier_str:
+						try:
+							user.subscription_tier = SubscriptionTier(tier_str)
+							user.subscription_status = SubscriptionStatus.active
+							user.paystack_customer_code = data.get("customer", {}).get("customer_code")
+							db.add(user)
+						except ValueError:
+							pass
 
-				payment = Payment(
-					id=uuid7str(),
-					user_id=user.id,
-					provider=PaymentProvider.paystack,
-					provider_payment_id=data["reference"],
-					status=PaymentStatus.succeeded,
-					amount_minor=data["amount"],
-					currency=data["currency"],
-					paid_at=datetime.now(timezone.utc),
-				)
-				db.add(payment)
-				await db.flush()
+					payment = Payment(
+						id=uuid7str(),
+						user_id=user.id,
+						provider=PaymentProvider.paystack,
+						provider_payment_id=data["reference"],
+						status=PaymentStatus.succeeded,
+						amount_minor=data["amount"],
+						currency=data["currency"],
+						paid_at=datetime.now(timezone.utc),
+					)
+					db.add(payment)
+					await db.flush()
+	except Exception as exc:
+		await redis.delete(idempotency_key)
+		log.error("paystack.webhook.handler_error", reference=event_ref, error=str(exc))
+		raise HTTPException(status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)})
 
 	await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 	return {"status": "ok"}

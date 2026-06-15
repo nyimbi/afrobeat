@@ -7,13 +7,16 @@ The task body is synchronous (Celery default). All async work is driven via
 """
 
 import traceback as tb
+from datetime import datetime, timezone
 from typing import Any
 
+import sqlalchemy as sa
 import structlog
 from celery import Task
 from celery.exceptions import MaxRetriesExceededError
 from opentelemetry import trace
 
+from gbedu_core.models.job import GenerationJob, JobStatus
 from gbedu_core.telemetry import get_tracer
 from gbedu_worker.celery_app import app
 from gbedu_worker.db import get_async_session, run_async
@@ -91,7 +94,8 @@ def run_generation_pipeline(self: Task, job_id: str) -> dict[str, Any]:
 				raise
 
 		except Exception as exc:
-			# Non-retryable — log full traceback and let Celery mark FAILURE
+			# Non-retryable — mark the DB record failed before letting Celery FAILURE-state the task.
+			# Without this the job row stays in its last intermediate state (e.g. ml_generating) forever.
 			task_log.error(
 				"unrecoverable error in generation pipeline",
 				exc_type=type(exc).__name__,
@@ -100,6 +104,10 @@ def run_generation_pipeline(self: Task, job_id: str) -> dict[str, Any]:
 			)
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
+			try:
+				run_async(_mark_job_failed(job_id, exc))
+			except Exception as db_exc:
+				task_log.error("failed to mark job as failed in DB", db_exc=str(db_exc))
 			raise
 
 
@@ -107,6 +115,18 @@ async def _run_pipeline(job_id: str) -> dict[str, Any]:
 	async with get_async_session() as session:
 		orchestrator = GenerationPipelineOrchestrator(job_id=job_id, session=session)
 		return await orchestrator.run()
+
+
+async def _mark_job_failed(job_id: str, exc: Exception) -> None:
+	async with get_async_session() as session:
+		result = await session.execute(sa.select(GenerationJob).where(GenerationJob.id == job_id))
+		job = result.scalar_one_or_none()
+		if job and not job.is_terminal:
+			job.status = JobStatus.failed
+			job.error_message = str(exc)
+			job.error_traceback = tb.format_exc()
+			job.completed_at = datetime.now(timezone.utc)
+			await session.commit()
 
 
 def _route_to_dlq(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -149,6 +149,15 @@ class Settings(BaseSettings):
 	@classmethod
 	def validate_log_level(cls, v: str) -> str:
 		return v.upper()
+
+	@model_validator(mode="after")
+	def validate_production_secrets(self) -> "Settings":
+		if self.is_production:
+			assert self.jwt.secret_key != "change-this-in-production", (
+				"JWT_SECRET_KEY must be set to a secure random value in production — "
+				"the default is a known plaintext value."
+			)
+		return self
 
 	@property
 	def is_production(self) -> bool:
