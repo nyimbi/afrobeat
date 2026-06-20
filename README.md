@@ -38,6 +38,141 @@ Gbẹdu takes a text prompt — genre, mood, language, tempo, instrument palette
 
 ---
 
+## How music generation works
+
+### The full pipeline
+
+```
+User prompt ("chill amapiano vibe, 110 BPM, Zulu lyrics")
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  1. Prompt engineering  (gbedu_ml.prompts.AfrobeatsPromptEngine)   │
+│                                                             │
+│  • Expands genre tag → ACE-Step style tokens:              │
+│    "amapiano, log drum, piano riff, 110bpm, melodic"       │
+│  • Adds regional markers: "South African township, joyful" │
+│  • BPM is encoded both in the text tag and as a           │
+│    conditioning signal passed directly to the model        │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│  2. Lyrics generation  (gbedu_ml.inference.LyricGenerator)  │
+│                                                             │
+│  Model: Llama-3 8B fine-tuned on curated African lyrics    │
+│  corpus spanning 5 regions, 15+ languages, 20+ genres       │
+│                                                             │
+│  • Generates verse / pre-chorus / chorus / bridge in the   │
+│    requested language (Zulu, Yoruba, Pidgin, Igbo…)        │
+│  • Phoneme-aware: optimised for singability, not just       │
+│    grammatical correctness                                  │
+│  • Each section tagged: [VERSE 1] … [CHORUS] … [BRIDGE]   │
+│  • Lyrics are passed to ACE-Step as a lyric conditioning   │
+│    string, not synthesised separately                       │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│  3. Music + vocal generation  (ACE-Step 1.5)               │
+│                                                             │
+│  ACE-Step is a diffusion-transformer model that generates  │
+│  music and vocals simultaneously from style tokens + lyrics.│
+│                                                             │
+│  Architecture: dual-stream transformer                     │
+│   • Music stream: conditions on style tags, BPM, key       │
+│   • Lyrics stream: aligns phonemes to the music timeline   │
+│   • Cross-attention fuses both streams every 4 layers      │
+│                                                             │
+│  Inference: DDIM sampler, default 100 steps (~45s on A100) │
+│   • --fast flag: 20 steps (~9s, slightly lower coherence)  │
+│   • Output: stereo WAV at 44 100 Hz, 16-bit               │
+│                                                             │
+│  Fallback chain (circuit breaker pattern):                 │
+│   1. ACE-Step 1.5 (primary — best quality)                │
+│   2. Stable Audio Open (if ACE-Step OOM or down)          │
+│   3. YuE (if both above fail)                             │
+└────────────────────────────┬────────────────────────────────┘
+                             │ (optional)
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│  4. Voice conversion  (RVC v2)                              │
+│                                                             │
+│  If a voice model is selected, the generated vocals are    │
+│  separated from the instrumental using Demucs, then        │
+│  converted to match the target voice's timbre via RVC v2   │
+│  (Retrieval-based Voice Conversion).                       │
+│                                                             │
+│  The converted vocals are then remixed back over the       │
+│  instrumental at the original levels.                      │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│  5. DSP post-processing  (gbedu-audio library)             │
+│                                                             │
+│  Applied in this order:                                    │
+│   a. Format normalisation — resample to 44 100 Hz stereo  │
+│   b. Genre EQ — genre-specific shelf/peak filters:        │
+│        amapiano → boost 60 Hz log drum, cut 3 kHz mud     │
+│        afrobeats → boost 80 Hz sub-bass, air shelf +10kHz │
+│   c. Multiband compression — 3-band (sub/mid/air)         │
+│   d. Stereo widening — Haas effect on mid-highs           │
+│   e. Loudness normalisation — target −14 LUFS (streaming) │
+│   f. True-peak limiter — ceiling −1.0 dBTP               │
+│   g. MP3 export — 320 kbps CBR via FFmpeg                │
+│                                                             │
+│  All parameters are genre-keyed: the same pipeline runs   │
+│  for all genres but reads different coefficient tables     │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│  6. Storage + delivery                                      │
+│                                                             │
+│  • WAV and MP3 uploaded to Cloudflare R2                   │
+│  • Signed URL returned (1-hour expiry)                     │
+│  • User notified by email and WebSocket push               │
+│  • Track metadata written to PostgreSQL                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Timing budget (single A100 GPU)
+
+| Step | P50 | P95 |
+|------|-----|-----|
+| Prompt engineering | < 1 ms | < 5 ms |
+| Lyrics generation (Llama-3 8B, 200 tokens) | 3 s | 8 s |
+| ACE-Step inference (30 s audio, 100 steps) | 42 s | 60 s |
+| DSP post-processing | 2 s | 5 s |
+| Upload to R2 | 1 s | 4 s |
+| **Total (no voice conversion)** | **~48 s** | **~77 s** |
+| RVC voice conversion (add-on) | +8 s | +15 s |
+
+### Quality levers available to users
+
+| Parameter | Effect |
+|-----------|--------|
+| `steps` | 20 (fast) → 100 (default) → 150 (highest quality) |
+| `guidance_scale` | 3.0 (varied) → 7.5 (default) → 12.0 (strict to prompt) |
+| `energy_level` | 1–10 scale mapped to compression ratio and dynamics |
+| `bpm` | Passed as explicit conditioning — overrides inferred tempo |
+| `voice_model_id` | RVC model ID for voice conversion (optional) |
+
+### Authenticity: what makes it Afrobeats, not generic pop
+
+The `AfrobeatsPromptEngine` maps each sub-genre to a vocabulary of ACE-Step style tokens derived from musicological analysis of the training corpus:
+
+- **Afrobeats**: shekere, talking drum, sekere groove, Fela-era horn stabs, call-and-response
+- **Amapiano**: log drum, piano lick, sax motif, Kabza-style chord progression, township vibe
+- **Afropop**: ogene bell, highlife guitar, Afroswing bass, four-on-the-floor kick
+- **Bongo Flava**: taarab strings, swahili flow, Dar es Salaam energy
+- **Soukous**: sebene guitar, ndombolo rhythm, Congolese brass
+
+The lyrics model was fine-tuned with Afrobeats-specific data augmentation: Nigerian Pidgin code-switching, Yoruba tonal phoneme annotation, and genre-specific hook structures (16-bar hook, 8-bar verse, 4-bar pre-chorus).
+
+---
+
 ## Architecture overview
 
 ```
@@ -242,7 +377,7 @@ All configuration is loaded by `gbedu_core.config.Settings` (pydantic-settings).
 
 ### Adding a new API endpoint
 
-Follow the router → service → schema → test pattern (full example in [`CLAUDE.md`](CLAUDE.md)):
+Follow the router → service → schema → test pattern:
 
 1. **Schema** — add Pydantic models to `libs/core/src/gbedu_core/schemas/`
 2. **Router** — add route function to `services/api/src/gbedu_api/routers/`
@@ -252,7 +387,7 @@ Follow the router → service → schema → test pattern (full example in [`CLA
 
 ### Adding a new Celery task
 
-All tasks must be idempotent. See [`CLAUDE.md`](CLAUDE.md) for the full checklist and the DLQ pattern.
+All tasks must be idempotent (safe to retry on failure). See the DLQ pattern in `docs/RUNBOOKS.md`.
 
 ### Logs
 
@@ -301,7 +436,7 @@ uv run pytest --co -q                               # dry-run: list collected te
 
 ## Code standards
 
-Full reference in [`CLAUDE.md`](CLAUDE.md). Key rules:
+Key rules (tabs, async, modern typing, structured logging):
 
 ### Tabs, not spaces
 

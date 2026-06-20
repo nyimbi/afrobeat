@@ -14,8 +14,15 @@ RATE_LIMIT_CREATOR = "1000/day"
 RATE_LIMIT_PRO = "10000/day"
 RATE_LIMIT_LABEL = "100000/day"
 
-RATE_LIMIT_AUTH = "10/minute"
-RATE_LIMIT_REGISTER = "5/hour"
+# Auth rate limits — tuned to block abuse while allowing legitimate bursts.
+# Register: tight (prevents bulk account farming per IP)
+# Login: moderate sliding window (brute-force protection without locking out CDN IPs)
+# Refresh: generous (tokens expire naturally; clients need headroom)
+# Logout: unlimited (always safe to log out)
+RATE_LIMIT_REGISTER    = "5/hour"
+RATE_LIMIT_LOGIN       = "20/minute"
+RATE_LIMIT_REFRESH     = "120/minute"
+RATE_LIMIT_AUTH        = "20/minute"   # generic fallback for other auth endpoints
 
 MAX_UPLOAD_SIZE_MB = 10
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024

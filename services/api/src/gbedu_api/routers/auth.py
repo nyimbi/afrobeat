@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gbedu_api.config import RATE_LIMIT_AUTH, RATE_LIMIT_REGISTER, get_settings
+from gbedu_api.config import RATE_LIMIT_LOGIN, RATE_LIMIT_REFRESH, RATE_LIMIT_REGISTER, get_settings
 from gbedu_api.deps import get_current_active_user, get_db, get_redis, limiter
 from gbedu_api.services.auth_service import AuthService, TokenPair
 from gbedu_api.services.email_service import EmailService
@@ -151,7 +151,7 @@ async def register(
 	status_code=status.HTTP_200_OK,
 	summary="Login with email and password",
 )
-@limiter.limit(RATE_LIMIT_AUTH)
+@limiter.limit(RATE_LIMIT_LOGIN)
 async def login(
 	request: Request,
 	body: LoginRequest,
@@ -172,7 +172,7 @@ async def login(
 	status_code=status.HTTP_200_OK,
 	summary="Exchange refresh token for a new access token",
 )
-@limiter.limit(RATE_LIMIT_AUTH)
+@limiter.limit(RATE_LIMIT_REFRESH)
 async def refresh_token(
 	request: Request,
 	body: RefreshRequest,
@@ -264,7 +264,7 @@ async def forgot_password(
 	status_code=status.HTTP_200_OK,
 	summary="Reset password using token from email",
 )
-@limiter.limit(RATE_LIMIT_AUTH)
+@limiter.limit(RATE_LIMIT_LOGIN)
 async def reset_password(
 	request: Request,
 	body: ResetPasswordRequest,

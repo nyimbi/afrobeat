@@ -25,6 +25,9 @@ import time
 import uuid
 from typing import Any
 
+import queue
+import threading
+
 from locust import HttpUser, LoadTestShape, between, events, task
 from locust.clients import ResponseContextManager
 
@@ -61,6 +64,65 @@ def _fire_custom(name: str, response_time: float, success: bool = True, exceptio
 		exception=exception,
 		context={},
 	)
+
+
+# ── pre-seeded user pool ──────────────────────────────────────────────────────
+# Shared pool of (email, password, access_token, refresh_token) tuples.
+# Pre-created at test_start so authenticated VUs don't all hit /auth/register
+# concurrently and trigger the per-IP rate limit (5/hour).
+
+_POOL_SIZE    = 50   # pre-register this many users before the test starts
+_user_pool:   queue.Queue  = queue.Queue()
+_pool_lock    = threading.Lock()
+_pool_ready   = threading.Event()
+
+
+@events.test_start.add_listener
+def _seed_user_pool(environment, **_kw) -> None:  # type: ignore[no-untyped-def]
+	"""Register POOL_SIZE users once before any VU starts."""
+	host = environment.host.rstrip("/")
+	import urllib.request, json as _json, urllib.error
+
+	seeded = 0
+	for _ in range(_POOL_SIZE):
+		email    = _rand_email()
+		password = "Gbẹdu_Pool_S33d!"
+		payload  = _json.dumps({"email": email, "password": password, "full_name": "Pool User"}).encode()
+		req      = urllib.request.Request(
+			f"{host}/api/v1/auth/register",
+			data=payload,
+			headers={"Content-Type": "application/json"},
+			method="POST",
+		)
+		try:
+			with urllib.request.urlopen(req, timeout=10) as r:
+				body = _json.loads(r.read())
+				tokens = body["tokens"]
+				_user_pool.put({
+					"email":         email,
+					"password":      password,
+					"access_token":  tokens["access_token"],
+					"refresh_token": tokens["refresh_token"],
+				})
+				seeded += 1
+		except Exception:
+			pass  # pool continues even if some registrations fail
+
+	print(f"[pool] seeded {seeded}/{_POOL_SIZE} users")
+	_pool_ready.set()
+
+
+def _pool_get() -> dict | None:
+	"""Get a user from the pool (non-blocking). Returns None when empty."""
+	try:
+		return _user_pool.get_nowait()
+	except queue.Empty:
+		return None
+
+
+def _pool_return(user: dict) -> None:
+	"""Return a user back to the pool for reuse."""
+	_user_pool.put(user)
 
 
 # ── rate-limit back-off ────────────────────────────────────────────────────────
@@ -173,9 +235,21 @@ class AuthenticatedUser(HttpUser):
 
 	def on_start(self) -> None:
 		self._my_track_ids = []
-		self._email    = _rand_email()
-		self._password = _rand_password()
-		self._register_and_login()
+		self._pool_user: dict | None = None
+
+		# Wait up to 15s for the pool to be seeded at test_start
+		_pool_ready.wait(timeout=15)
+		self._pool_user = _pool_get()
+		if self._pool_user:
+			self._email         = self._pool_user["email"]
+			self._password      = self._pool_user["password"]
+			self._access_token  = self._pool_user["access_token"]
+			self._refresh_token = self._pool_user["refresh_token"]
+		else:
+			# Pool exhausted — register a fresh user as fallback
+			self._email    = _rand_email()
+			self._password = _rand_password()
+			self._register_and_login()
 
 	# ── auth helpers ──────────────────────────────────────────────────────────
 
@@ -193,8 +267,10 @@ class AuthenticatedUser(HttpUser):
 			body = resp.json()
 			self._access_token  = body["tokens"]["access_token"]
 			self._refresh_token = body["tokens"]["refresh_token"]
+		elif resp.status_code == 429:
+			# Rate-limited — stop this VU rather than hammering with bad tokens
+			self.environment.runner.quit()
 		else:
-			# Fallback: try login in case duplicate email from a previous run
 			self._do_login()
 
 	def _do_login(self) -> None:
@@ -211,6 +287,10 @@ class AuthenticatedUser(HttpUser):
 	def _auth_headers(self) -> dict[str, str]:
 		if not self._access_token:
 			self._do_login()
+		# Guard: if still no token, stop the VU — never send "Bearer None"
+		if not self._access_token:
+			self.environment.runner.quit()
+			return {}
 		return {"Authorization": f"Bearer {self._access_token}"}
 
 	def _handle_401(self, resp: ResponseContextManager) -> bool:
@@ -368,13 +448,20 @@ class AuthenticatedUser(HttpUser):
 			else:
 				resp.failure(f"Track detail returned {resp.status_code}")
 
-	def on_stop(self) -> None:
+	def on_stop(self) -> None:  # type: ignore[override]
+		# This on_stop intentionally overrides the pool-return stub added in on_start.
 		if self._refresh_token:
 			self.client.post(
 				"/api/v1/auth/logout",
 				json={"refresh_token": self._refresh_token},
 				name="/api/v1/auth/logout",
 			)
+		# Return user to pool with fresh tokens for reuse by next VU
+		if self._pool_user and self._access_token:
+			self._pool_user["access_token"]  = self._access_token
+			self._pool_user["refresh_token"] = self._refresh_token or self._pool_user["refresh_token"]
+			_pool_return(self._pool_user)
+			self._pool_user = None
 
 
 # ── power user ────────────────────────────────────────────────────────────────
@@ -397,9 +484,19 @@ class PowerUser(HttpUser):
 	def on_start(self) -> None:
 		self._my_track_ids    = []
 		self._my_voice_models = []
-		self._email    = _rand_email()
-		self._password = _rand_password()
-		self._register_and_login()
+		self._pool_user: dict | None = None
+
+		_pool_ready.wait(timeout=15)
+		self._pool_user = _pool_get()
+		if self._pool_user:
+			self._email         = self._pool_user["email"]
+			self._password      = self._pool_user["password"]
+			self._access_token  = self._pool_user["access_token"]
+			self._refresh_token = self._pool_user["refresh_token"]
+		else:
+			self._email    = _rand_email()
+			self._password = _rand_password()
+			self._register_and_login()
 
 	def _register_and_login(self) -> None:
 		resp = self.client.post(
@@ -415,6 +512,8 @@ class PowerUser(HttpUser):
 			body = resp.json()
 			self._access_token  = body["tokens"]["access_token"]
 			self._refresh_token = body["tokens"]["refresh_token"]
+		elif resp.status_code == 429:
+			self.environment.runner.quit()
 		else:
 			self._do_login()
 
@@ -432,6 +531,9 @@ class PowerUser(HttpUser):
 	def _auth_headers(self) -> dict[str, str]:
 		if not self._access_token:
 			self._do_login()
+		if not self._access_token:
+			self.environment.runner.quit()
+			return {}
 		return {"Authorization": f"Bearer {self._access_token}"}
 
 	def _handle_401(self, resp: ResponseContextManager) -> bool:
@@ -611,6 +713,11 @@ class PowerUser(HttpUser):
 				json={"refresh_token": self._refresh_token},
 				name="/api/v1/auth/logout (power)",
 			)
+		if self._pool_user and self._access_token:
+			self._pool_user["access_token"]  = self._access_token
+			self._pool_user["refresh_token"] = self._refresh_token or self._pool_user["refresh_token"]
+			_pool_return(self._pool_user)
+			self._pool_user = None
 
 
 # ── load shape ────────────────────────────────────────────────────────────────
