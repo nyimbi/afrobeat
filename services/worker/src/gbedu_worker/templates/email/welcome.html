@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Welcome to Gbẹdu{% endblock %}
+{% block content %}
+<p class="greeting">Welcome to Gbẹdu, {{ user_name }}</p>
+<p class="body-text">
+  You now have access to AI-powered Afrobeats production — generate full tracks
+  with lyrics in Yoruba, Pidgin, Igbo, Swahili, and more, in under 60 seconds.
+</p>
+<div class="cta-wrap">
+  <a href="{{ dashboard_url }}" class="cta-btn">Open Studio</a>
+</div>
+<div class="divider"></div>
+<p class="body-text" style="margin-bottom: 12px;">A few things to get you started:</p>
+<table style="width:100%; border-collapse:collapse;">
+  <tr>
+    <td style="padding: 10px 0; vertical-align: top; width: 28px;">
+      <span style="color:#D4AF37; font-size:16px;">1</span>
+    </td>
+    <td style="padding: 10px 0; font-size:14px; color:#A1A1AA; line-height:1.6;">
+      <strong style="color:#E4E4E7;">Write a prompt</strong> — describe the vibe, mood, or story you want to tell.
+    </td>
+  </tr>
+  <tr>
+    <td style="padding: 10px 0; vertical-align: top; width: 28px;">
+      <span style="color:#D4AF37; font-size:16px;">2</span>
+    </td>
+    <td style="padding: 10px 0; font-size:14px; color:#A1A1AA; line-height:1.6;">
+      <strong style="color:#E4E4E7;">Pick a sub-genre</strong> — Afrobeats, Amapiano cross, Bongo Flava, and 13 more.
+    </td>
+  </tr>
+  <tr>
+    <td style="padding: 10px 0; vertical-align: top; width: 28px;">
+      <span style="color:#D4AF37; font-size:16px;">3</span>
+    </td>
+    <td style="padding: 10px 0; font-size:14px; color:#A1A1AA; line-height:1.6;">
+      <strong style="color:#E4E4E7;">Hit Generate</strong> — your track will be ready in under 60 seconds.
+    </td>
+  </tr>
+</table>
+<div class="divider"></div>
+<p class="meta-text">
+  Questions? Browse the <a href="{{ docs_url }}" style="color:#D4AF37;">docs</a> or reply to this email.
+</p>
+{% endblock %}

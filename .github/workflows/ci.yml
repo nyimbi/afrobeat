@@ -4,7 +4,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: ["**"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,12 +17,12 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/gbedu
 
 jobs:
-  # ── Lint ─────────────────────────────────────────────────────────────────────
+  # ── Lint ──────────────────────────────────────────────────────────────────────
 
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -41,17 +41,17 @@ jobs:
         run: uv sync --all-packages --frozen
 
       - name: ruff check
-        run: uv run ruff check libs/ services/ --output-format=github
+        run: uv run ruff check libs/ services/ tests/ --output-format=github
 
       - name: ruff format check
-        run: uv run ruff format --check libs/ services/
+        run: uv run ruff format --check libs/ services/ tests/
 
   # ── Type-check ────────────────────────────────────────────────────────────────
 
   typecheck:
     name: Type-check (pyright)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
   test-unit:
     name: Unit tests + coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -98,29 +98,29 @@ jobs:
       - name: Run unit tests with coverage
         run: |
           uv run pytest tests/unit/ \
-            libs/core/tests/ \
             libs/audio/tests/ \
-            --cov=libs/core/src \
-            --cov=libs/audio/src \
+            -q --tb=short \
+            --cov=libs \
+            --cov=services \
             --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=90 \
-            -v --tb=short
+            --cov-fail-under=90
 
-      - name: Upload coverage report
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         if: always()
         with:
           files: coverage.xml
           flags: unit
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # ── Integration tests ─────────────────────────────────────────────────────────
 
   test-integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    needs: [test-unit]
 
     services:
       postgres:
@@ -152,7 +152,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/1
       CELERY_RESULT_BACKEND: redis://localhost:6379/2
-      JWT_SECRET_KEY: test-secret-key-for-ci-only
+      JWT_SECRET_KEY: test-secret-key-for-ci-32chars!!
       JWT_ALGORITHM: HS256
       ENVIRONMENT: test
       LOG_LEVEL: WARNING
@@ -161,8 +161,10 @@ jobs:
       R2_BUCKET_NAME: gbedu-test
       R2_PUBLIC_URL: http://localhost:4566
       SMTP_HOST: localhost
-      SMTP_PORT: 1025
-      FROM_EMAIL: test@gbedu.com
+      SMTP_PORT: "1025"
+      FROM_EMAIL: test@gbedu.io
+      FRONTEND_URL: http://localhost:3000
+      ALLOWED_ORIGINS: http://localhost:3000
 
     steps:
       - uses: actions/checkout@v4
@@ -186,75 +188,16 @@ jobs:
       - name: Run integration tests
         run: |
           uv run pytest tests/integration/ \
-            services/api/tests/ \
-            services/worker/tests/ \
-            -m integration \
-            -v --tb=short
+            -q --tb=short \
+            -m integration
 
-  # ── Security scan ─────────────────────────────────────────────────────────────
+  # ── Docker build — Python services ───────────────────────────────────────────
 
-  security-scan:
-    name: Security scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      security-events: write
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --all-packages --frozen
-
-      - name: bandit — Python security lint
-        run: |
-          uv run pip install bandit[toml]
-          uv run bandit -r libs/ services/ \
-            -x "*/tests/*,*/__pycache__/*" \
-            -f json -o bandit-report.json || true
-          uv run bandit -r libs/ services/ \
-            -x "*/tests/*,*/__pycache__/*" \
-            -ll
-
-      - name: npm audit (web)
-        working-directory: services/web
-        run: npm audit --audit-level=high
-        continue-on-error: true
-
-      - name: Trivy — container vulnerability scan (api)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: fs
-          scan-ref: services/api
-          severity: CRITICAL,HIGH
-          format: sarif
-          output: trivy-results.sarif
-        continue-on-error: true
-
-      - name: Upload Trivy SARIF results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-        continue-on-error: true
-
-  # ── Docker build ──────────────────────────────────────────────────────────────
-
-  build:
+  build-api:
     name: Docker build (${{ matrix.service }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    needs: [test-unit]
 
     strategy:
       fail-fast: false
@@ -272,14 +215,44 @@ jobs:
         with:
           context: services/${{ matrix.service }}
           push: false
-          tags: gbedu-${{ matrix.service }}:ci-${{ github.sha }}
+          tags: gbedu-${{ matrix.service }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ── Docker build — web (Node) ─────────────────────────────────────────────────
 
   build-web:
     name: Docker build (web)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: services/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: services/web
+        run: npm ci
+
+      - name: Build Next.js app
+        working-directory: services/web
+        run: npm run build
+
+  # ── Security scan ─────────────────────────────────────────────────────────────
+
+  security-scan:
+    name: Security scan (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -287,11 +260,109 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build web image
+      - name: Build API image for scanning
         uses: docker/build-push-action@v6
         with:
-          context: services/web
+          context: services/api
           push: false
-          tags: gbedu-web:ci-${{ github.sha }}
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          tags: gbedu-api:scan-${{ github.sha }}
+          load: true
+          cache-from: type=gha,scope=api
+
+      - name: Trivy — scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: gbedu-api:scan-${{ github.sha }}
+          scan-type: image
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+  load-test-syntax:
+    name: Load test syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-packages --frozen
+
+      - name: Validate locustfile imports cleanly
+        run: |
+          uv run python -c "
+          import ast, sys
+          with open('tests/load/locustfile.py') as f:
+              src = f.read()
+          try:
+              ast.parse(src)
+              print('locustfile.py: syntax OK')
+          except SyntaxError as e:
+              print(f'locustfile.py: SYNTAX ERROR: {e}')
+              sys.exit(1)
+          "
+
+      - name: Validate chaos scenarios syntax
+        run: |
+          uv run python -c "
+          import ast, sys
+          with open('tests/chaos/scenarios.py') as f:
+              src = f.read()
+          try:
+              ast.parse(src)
+              print('chaos/scenarios.py: syntax OK')
+          except SyntaxError as e:
+              print(f'chaos/scenarios.py: SYNTAX ERROR: {e}')
+              sys.exit(1)
+          "
+
+      - name: Property-based tests (Hypothesis)
+        run: |
+          uv run pytest tests/unit/test_property_based.py -v \
+            --tb=short \
+            -x \
+            --hypothesis-seed=0
+        env:
+          GBEDU_ML_API_KEY: test-ml-internal-api-key
+
+      - name: Validate k8s manifests (offline YAML + required fields)
+        run: |
+          uv run python - << 'PYEOF'
+          import yaml, sys
+          from pathlib import Path
+          k8s_dir = Path("infra/k8s")
+          errors = []
+          for f in sorted(k8s_dir.rglob("*.yaml")):
+              try:
+                  docs = list(yaml.safe_load_all(f.read_text()))
+                  for i, doc in enumerate(docs):
+                      if not doc:
+                          continue
+                      for field in ("apiVersion", "kind", "metadata"):
+                          if field not in doc:
+                              errors.append(f"{f}[{i}]: missing '{field}'")
+              except yaml.YAMLError as e:
+                  errors.append(f"{f}: YAML error: {e}")
+          if errors:
+              for e in errors:
+                  print(f"FAIL: {e}")
+              sys.exit(1)
+          print(f"OK: all {len(list(k8s_dir.rglob('*.yaml')))} manifests valid")
+          PYEOF

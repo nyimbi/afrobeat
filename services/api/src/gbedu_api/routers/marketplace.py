@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import httpx
+import stripe
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gbedu_api.config import get_settings
 from gbedu_api.deps import get_current_active_user, get_db, require_tier
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.errors import AuthorizationError, GbeduError, NotFoundError
@@ -56,15 +59,21 @@ class CreateListingRequest(BaseModel):
 	tags: list[str] = Field(default_factory=list)
 
 
+class PurchaseBeatRequest(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	payment_method: str | None = None
+
+
 class PurchaseResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
-	id: str
+	id: str | None = None
 	listing_id: str
-	amount_minor: int
-	currency: str
-	license_type: str
-	download_url: str | None
-	created_at: str
+	amount_minor: int | None = None
+	currency: str | None = None
+	license_type: str | None = None
+	download_url: str | None = None
+	checkout_url: str | None = None
+	created_at: str | None = None
 
 
 class PaginatedListingsResponse(BaseModel):
@@ -248,11 +257,12 @@ async def get_beat(
 @router.post(
 	"/beats/{beat_id}/purchase",
 	response_model=PurchaseResponse,
-	status_code=status.HTTP_201_CREATED,
-	summary="Purchase a beat",
+	status_code=status.HTTP_200_OK,
+	summary="Purchase a beat — free beats complete immediately; paid beats return a checkout URL",
 )
 async def purchase_beat(
 	beat_id: str,
+	body: PurchaseBeatRequest,
 	user: Annotated[User, Depends(get_current_active_user)],
 	db: Annotated[AsyncSession, Depends(get_db)],
 ) -> PurchaseResponse:
@@ -288,45 +298,116 @@ async def purchase_beat(
 			detail={"error_code": "CONFLICT", "message": "You have already purchased this beat"},
 		)
 
-	# For free beats, complete immediately; paid beats require payment flow
-	if listing.price_minor > 0:
-		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-			detail={
-				"error_code": "PAYMENT_ERROR",
-				"message": "Paid beat purchase requires initializing a payment first via /payments/stripe/create-checkout or /payments/paystack/initialize",
-			},
+	# ── Free beat — complete immediately ──────────────────────────────────────
+	if listing.price_minor == 0:
+		purchase = BeatPurchase(
+			id=uuid7str(),
+			listing_id=beat_id,
+			buyer_id=user.id,
+			seller_id=listing.seller_id,
+			payment_provider="free",
+			provider_payment_id=uuid7str(),
+			amount_minor=0,
+			currency=listing.currency,
+			license_type=listing.license_type,
+		)
+		db.add(purchase)
+		listing.purchase_count += 1
+		if listing.license_type == LicenseType.exclusive:
+			listing.status = ListingStatus.sold_out
+		db.add(listing)
+		await db.flush()
+		log.info("marketplace.free_purchase_complete", listing_id=beat_id, buyer_id=user.id)
+		return PurchaseResponse(
+			id=purchase.id,
+			listing_id=purchase.listing_id,
+			amount_minor=purchase.amount_minor,
+			currency=purchase.currency,
+			license_type=purchase.license_type.value,
+			download_url=purchase.download_url,
+			created_at=purchase.created_at.isoformat(),
 		)
 
-	purchase = BeatPurchase(
-		id=uuid7str(),
-		listing_id=beat_id,
-		buyer_id=user.id,
-		seller_id=listing.seller_id,
-		payment_provider="free",
-		provider_payment_id=uuid7str(),
-		amount_minor=0,
-		currency=listing.currency,
-		license_type=listing.license_type,
-	)
-	db.add(purchase)
+	# ── Paid beat — create payment provider checkout session ─────────────────
+	payment_method = (body.payment_method or "stripe").lower()
+	settings = get_settings()
+	beat_meta = {
+		"user_id": user.id,
+		"listing_id": listing.id,
+		"seller_id": listing.seller_id,
+		"purchase_type": "beat",
+	}
 
-	listing.purchase_count += 1
-	if listing.license_type == LicenseType.exclusive:
-		listing.status = ListingStatus.sold_out
-	db.add(listing)
+	if payment_method == "stripe":
+		stripe.api_key = settings.stripe.secret_key
+		try:
+			session = stripe.checkout.Session.create(
+				payment_method_types=["card"],
+				line_items=[
+					{
+						"price_data": {
+							"currency": listing.currency.lower(),
+							"product_data": {
+								"name": listing.title,
+								"description": f"Beat license — {listing.license_type.value.replace('_', ' ')}",
+							},
+							"unit_amount": listing.price_minor,
+						},
+						"quantity": 1,
+					}
+				],
+				mode="payment",
+				success_url=(
+					f"{settings.frontend_url}/marketplace"
+					f"?purchase=success&listing_id={listing.id}"
+				),
+				cancel_url=f"{settings.frontend_url}/marketplace",
+				metadata=beat_meta,
+			)
+		except stripe.error.StripeError as exc:
+			log.error("marketplace.stripe_checkout_failed", listing_id=listing.id, error=str(exc))
+			raise HTTPException(
+				status_code=status.HTTP_502_BAD_GATEWAY,
+				detail={"error_code": "PAYMENT_ERROR", "message": "Failed to create Stripe checkout session"},
+			)
+		log.info("marketplace.stripe_checkout_created", listing_id=listing.id, buyer_id=user.id)
+		return PurchaseResponse(listing_id=listing.id, checkout_url=session.url)
 
-	await db.flush()
-	log.info("marketplace.purchase_complete", listing_id=beat_id, buyer_id=user.id)
+	elif payment_method == "paystack":
+		async with httpx.AsyncClient(timeout=30.0) as http:
+			resp = await http.post(
+				f"{settings.paystack.base_url}/transaction/initialize",
+				headers={
+					"Authorization": f"Bearer {settings.paystack.secret_key}",
+					"Content-Type": "application/json",
+				},
+				json={
+					"email": user.email,
+					"amount": listing.price_minor,
+					"currency": listing.currency,
+					"metadata": beat_meta,
+					"callback_url": (
+						f"{settings.frontend_url}/marketplace"
+						f"?purchase=success&listing_id={listing.id}"
+					),
+				},
+			)
+		if resp.status_code != 200:
+			log.error("marketplace.paystack_init_failed", listing_id=listing.id, status=resp.status_code)
+			raise HTTPException(
+				status_code=status.HTTP_502_BAD_GATEWAY,
+				detail={"error_code": "PAYMENT_ERROR", "message": "Paystack initialization failed"},
+			)
+		ps_data = resp.json()["data"]
+		log.info("marketplace.paystack_checkout_created", listing_id=listing.id, buyer_id=user.id)
+		return PurchaseResponse(listing_id=listing.id, checkout_url=ps_data["authorization_url"])
 
-	return PurchaseResponse(
-		id=purchase.id,
-		listing_id=purchase.listing_id,
-		amount_minor=purchase.amount_minor,
-		currency=purchase.currency,
-		license_type=purchase.license_type.value,
-		download_url=purchase.download_url,
-		created_at=purchase.created_at.isoformat(),
+	raise HTTPException(
+		status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+		detail={
+			"error_code": "VALIDATION_ERROR",
+			"message": f"Unknown payment_method {payment_method!r}. Use 'stripe' or 'paystack'.",
+		},
 	)
 
 
@@ -409,3 +490,99 @@ async def my_purchases(
 	]
 
 	return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+_BEAT_DOWNLOAD_EXPIRES = 86400 * 3  # 72 hours
+
+
+class RefreshDownloadResponse(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	purchase_id: str
+	download_url: str
+	expires_at: str
+
+
+@router.post(
+	"/purchases/{purchase_id}/refresh-download",
+	response_model=RefreshDownloadResponse,
+	status_code=status.HTTP_200_OK,
+	summary="Refresh an expired beat download link (72-hour presigned URL)",
+)
+async def refresh_download_url(
+	purchase_id: str,
+	user: Annotated[User, Depends(get_current_active_user)],
+	db: Annotated[AsyncSession, Depends(get_db)],
+) -> RefreshDownloadResponse:
+	"""Generate a fresh 72-hour presigned download URL for a purchased beat.
+
+	Only the original buyer may request a refresh.  The new URL is persisted
+	to the database so the user can retrieve it again from /my-purchases.
+	"""
+	from gbedu_api.deps import get_storage
+	from gbedu_api.config import get_settings
+	from gbedu_core.config import StorageSettings
+	from gbedu_core.models.track import Track
+
+	result = await db.execute(
+		select(BeatPurchase).where(BeatPurchase.id == purchase_id)
+	)
+	purchase = result.scalar_one_or_none()
+
+	if purchase is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail={"error_code": "NOT_FOUND", "message": "Purchase not found"},
+		)
+
+	if purchase.buyer_id != user.id:
+		raise HTTPException(
+			status_code=status.HTTP_403_FORBIDDEN,
+			detail={"error_code": "FORBIDDEN", "message": "Access denied"},
+		)
+
+	# Load the listing → track to derive the R2 object key
+	listing_result = await db.execute(
+		select(BeatListing).where(BeatListing.id == purchase.listing_id)
+	)
+	listing = listing_result.scalar_one_or_none()
+	if listing is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail={"error_code": "NOT_FOUND", "message": "Beat listing no longer exists"},
+		)
+
+	track_result = await db.execute(select(Track).where(Track.id == listing.track_id))
+	track = track_result.scalar_one_or_none()
+	if track is None or not track.audio_url:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail={"error_code": "NOT_FOUND", "message": "Beat audio file not found"},
+		)
+
+	storage_settings = StorageSettings()
+	r2_public_url = storage_settings.r2_public_url.rstrip("/")
+	r2_key = track.audio_url.removeprefix(f"{r2_public_url}/")
+
+	try:
+		storage = await get_storage()
+		download_url = await storage.get_presigned_url(r2_key, expires_in=_BEAT_DOWNLOAD_EXPIRES)
+	except Exception as exc:
+		log.error("marketplace.refresh_download.presign_failed", purchase_id=purchase_id, exc=str(exc))
+		raise HTTPException(
+			status_code=status.HTTP_502_BAD_GATEWAY,
+			detail={"error_code": "STORAGE_ERROR", "message": "Failed to generate download link. Try again shortly."},
+		)
+
+	expires_at = datetime.now(timezone.utc) + timedelta(seconds=_BEAT_DOWNLOAD_EXPIRES)
+
+	purchase.download_url = download_url
+	purchase.download_expires_at = expires_at
+	db.add(purchase)
+	await db.flush()
+
+	log.info("marketplace.refresh_download.ok", purchase_id=purchase_id, buyer_id=user.id)
+	return RefreshDownloadResponse(
+		purchase_id=purchase_id,
+		download_url=download_url,
+		expires_at=expires_at.isoformat(),
+	)

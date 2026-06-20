@@ -50,11 +50,11 @@ class EmailService:
 				if self._settings.smtp_user:
 					await smtp.login(self._settings.smtp_user, self._settings.smtp_password)
 				await smtp.send_message(msg)
-		except SMTPException as exc:
+			log.info("email.sent", to=to, subject=subject)
+		except Exception as exc:
+			# Email delivery is non-critical — log and swallow so a background-task
+			# failure never rolls back the caller's DB transaction.
 			log.error("email.send.failed", to=to, subject=subject, error=str(exc))
-			raise
-
-		log.info("email.sent", to=to, subject=subject)
 
 	def _render(self, template_name: str, **ctx: object) -> str:
 		try:

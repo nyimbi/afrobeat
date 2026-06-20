@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}You're on {{ tier }} — Gbẹdu{% endblock %}
+{% block content %}
+<p class="greeting">You're now on the {{ tier }} plan</p>
+<p class="body-text">
+  {{ user_name }}, your upgrade is active. Here's what just unlocked for you:
+</p>
+{% if tier == "Creator" %}
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+  {% for feature in ["20 tracks per day", "320 kbps MP3 + WAV downloads", "Stem separation (drums, bass, vocals, guitar, piano)", "Marketplace selling — publish and earn", "Commercial license on all tracks"] %}
+  <tr>
+    <td style="padding:8px 0; width:20px; vertical-align:top;">
+      <span style="color:#D4AF37; font-size:14px;">✓</span>
+    </td>
+    <td style="padding:8px 0; font-size:14px; color:#A1A1AA; line-height:1.5;">{{ feature }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% elif tier == "Pro" %}
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+  {% for feature in ["100 tracks per day", "Lossless WAV + stems", "Custom voice model training (RVC v2)", "Priority GPU queue — skip the line", "API access (coming soon)"] %}
+  <tr>
+    <td style="padding:8px 0; width:20px; vertical-align:top;">
+      <span style="color:#D4AF37; font-size:14px;">✓</span>
+    </td>
+    <td style="padding:8px 0; font-size:14px; color:#A1A1AA; line-height:1.5;">{{ feature }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% elif tier == "Label" %}
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+  {% for feature in ["500 tracks per day", "White-label export", "Dedicated support + SLA", "Custom genre fine-tuning", "Team seats + shared library"] %}
+  <tr>
+    <td style="padding:8px 0; width:20px; vertical-align:top;">
+      <span style="color:#D4AF37; font-size:14px;">✓</span>
+    </td>
+    <td style="padding:8px 0; font-size:14px; color:#A1A1AA; line-height:1.5;">{{ feature }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+<div class="cta-wrap">
+  <a href="{{ dashboard_url }}" class="cta-btn">Go to Studio</a>
+</div>
+<div class="divider"></div>
+<p class="meta-text">
+  Manage your subscription, invoices, and payment method in
+  <a href="{{ billing_url }}" style="color:#D4AF37;">Billing settings</a>.
+</p>
+{% endblock %}

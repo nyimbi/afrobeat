@@ -1,0 +1,96 @@
+global:
+  # SMTP for email notifications (not wired to a receiver yet — extend as needed)
+  smtp_smarthost: "${ALERTMANAGER_SMTP_SMARTHOST}"
+  smtp_from: "alertmanager@gbedu.io"
+  smtp_require_tls: true
+
+  # Slack global API URL (overridden per receiver where needed)
+  slack_api_url: "${ALERTMANAGER_SLACK_API_URL}"
+
+  resolve_timeout: 5m
+
+# ── Top-level routing tree ────────────────────────────────────────────────────
+route:
+  receiver: "null"
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical alerts → PagerDuty + Slack #incidents
+    - matchers:
+        - severity = "critical"
+      receiver: pagerduty-critical
+      continue: true
+
+    - matchers:
+        - severity = "critical"
+      receiver: slack-critical
+
+    # Warning alerts → Slack #alerts only
+    - matchers:
+        - severity = "warning"
+      receiver: slack-warnings
+
+# ── Inhibition rules ──────────────────────────────────────────────────────────
+# Suppress a warning when a critical alert with the same alertname is already
+# firing.  Prevents duplicate noise during full outages.
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname"]
+
+# ── Receivers ─────────────────────────────────────────────────────────────────
+receivers:
+  # Catch-all — drop silently (alerts that match nothing above)
+  - name: "null"
+
+  # PagerDuty — critical pages
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - routing_key: "${PAGERDUTY_INTEGRATION_KEY}"
+        description: "{{ .CommonAnnotations.summary }}"
+        severity: "{{ if eq .CommonLabels.severity \"critical\" }}critical{{ else }}warning{{ end }}"
+        details:
+          firing: "{{ .Alerts.Firing | len }}"
+          description: "{{ .CommonAnnotations.description }}"
+          runbook_url: "{{ .CommonAnnotations.runbook_url }}"
+          cluster: "{{ .CommonLabels.cluster }}"
+          env: "{{ .CommonLabels.env }}"
+
+  # Slack — #incidents (critical)
+  - name: slack-critical
+    slack_configs:
+      - api_url: "${ALERTMANAGER_SLACK_API_URL}"
+        channel: "#incidents"
+        send_resolved: true
+        color: "{{ if eq .Status \"firing\" }}danger{{ else }}good{{ end }}"
+        title: "{{ if eq .Status \"firing\" }}:fire: CRITICAL{{ else }}:white_check_mark: RESOLVED{{ end }} — {{ .CommonAnnotations.summary }}"
+        text: |
+          *Alert:* {{ .CommonAnnotations.summary }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Cluster:* {{ .CommonLabels.cluster }} / {{ .CommonLabels.env }}
+          *Description:* {{ .CommonAnnotations.description }}
+          {{ if .CommonAnnotations.runbook_url }}*Runbook:* {{ .CommonAnnotations.runbook_url }}{{ end }}
+        icon_emoji: ":fire:"
+        footer: "Gbẹdu Alertmanager"
+
+  # Slack — #alerts (warnings)
+  - name: slack-warnings
+    slack_configs:
+      - api_url: "${ALERTMANAGER_SLACK_API_URL}"
+        channel: "#alerts"
+        send_resolved: true
+        color: "{{ if eq .Status \"firing\" }}warning{{ else }}good{{ end }}"
+        title: "{{ if eq .Status \"firing\" }}:warning: WARNING{{ else }}:white_check_mark: RESOLVED{{ end }} — {{ .CommonAnnotations.summary }}"
+        text: |
+          *Alert:* {{ .CommonAnnotations.summary }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Cluster:* {{ .CommonLabels.cluster }} / {{ .CommonLabels.env }}
+          *Description:* {{ .CommonAnnotations.description }}
+          {{ if .CommonAnnotations.runbook_url }}*Runbook:* {{ .CommonAnnotations.runbook_url }}{{ end }}
+        icon_emoji: ":warning:"
+        footer: "Gbẹdu Alertmanager"

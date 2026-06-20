@@ -33,6 +33,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DATABASE_URL", f"postgresql+asyncpg://{_DB_USER}@localhost:5432/gbedu_test")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
+os.environ.setdefault("GBEDU_ML_API_KEY", "test-ml-internal-api-key")
 
 from gbedu_core.config import Settings
 from gbedu_core.db import Base, make_session_factory

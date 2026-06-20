@@ -21,6 +21,7 @@ members = [
 ]
 
 [tool.uv]
+package = false
 dev-dependencies = [
 	"pytest>=8.2",
 	"pytest-asyncio>=0.23",
@@ -31,6 +32,8 @@ dev-dependencies = [
 	"mypy>=1.10",
 	"coverage[toml]>=7.5",
 	"pytest-cov>=5.0",
+	"hypothesis>=6.155.6",
+	"locust>=2.44.4",
 ]
 
 [tool.ruff]
@@ -65,6 +68,10 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests", "libs/audio/tests", "services/ml/tests"]
 addopts = "-v --tb=short --import-mode=importlib"
+markers = [
+	"integration: marks tests that require infrastructure (DB, Redis) — excluded from pure unit runs",
+	"readonly: marks read-only integration tests safe to run against production",
+]
 
 [tool.coverage.run]
 source = ["libs", "services"]

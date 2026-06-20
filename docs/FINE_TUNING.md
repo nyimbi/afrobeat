@@ -226,6 +226,27 @@ The ML service loads the model from R2 on startup via `LYRICS_MODEL_PATH` env va
 
 ## RVC v2 voice model training
 
+### Dependencies
+
+The `rvc` package is not on PyPI. Install it from source before running any training or inference commands:
+
+```bash
+# From the repo root — installs rvc and all required native deps
+bash services/ml/install_rvc.sh
+```
+
+Required packages installed by that script:
+
+| Package | Purpose |
+|---------|---------|
+| `rvc` (from GitHub) | Voice conversion and training core |
+| `fairseq` | Wav2Vec2 feature extraction (used by RVC pitch extractor) |
+| `faiss-cpu` | FAISS index for feature retrieval (use `faiss-gpu` on GPU nodes) |
+| `praat-parselmouth` | Pitch analysis via Praat |
+| `pyworld` | WORLD vocoder — harvest/dio pitch extraction |
+
+In the ML service Docker image, `install_rvc.sh` is called during the builder stage. If installation fails at build time (e.g. network issue fetching the GitHub repo), the build continues with a warning and voice synthesis is disabled at runtime (`is_loaded=False` in `/health`).
+
 ### Overview
 
 RVC (Retrieval-based Voice Conversion) v2 trains a small voice encoder per speaker from 5–30 minutes of clean vocal audio. Each voice model is specific to one speaker/artist. System-provided voice models are generic (gender + style); user-uploaded voice models are speaker-specific.

@@ -440,3 +440,326 @@ sudo rm -rf /var/lib/postgresql/17/test_restore
 ```
 
 Expected: restore completes without errors, user count is reasonable.
+
+---
+
+## Disaster Recovery Scenarios
+
+### DR-1: PostgreSQL Primary Failure
+
+**Detection:** Prometheus alert `PostgresPrimaryDown` fires, or `pg_replication_slots_pg_wal_lsn_diff > 0` sustained for 5m. Confirm via API `/ready` returning 503 with `db` component unhealthy.
+
+**Immediate response:**
+
+```bash
+# Check replication lag on hot standby (run on standby server: 144.91.112.190)
+ssh root@144.91.112.190
+sudo -u postgres psql -c "SELECT now() - pg_last_xact_replay_timestamp() AS replication_lag;"
+
+# Verify API health — look for db component
+curl https://api.gbedu.com/ready
+```
+
+**Promote standby to primary:**
+
+```bash
+# On standby server (144.91.112.190)
+sudo -u postgres pg_ctl promote -D /var/lib/postgresql/17/main
+# Confirm promotion
+sudo -u postgres psql -c "SELECT pg_is_in_recovery();"
+# Should return: f (false = now primary)
+```
+
+**Update DATABASE_URL and restart services:**
+
+```bash
+# Edit the Kubernetes secret — update DATABASE_URL host to 144.91.112.190
+kubectl edit secret gbedu-secrets -n gbedu
+
+# Rolling restart API and worker to pick up new DATABASE_URL
+kubectl rollout restart deployment/gbedu-api deployment/gbedu-worker -n gbedu
+kubectl rollout status deployment/gbedu-api deployment/gbedu-worker -n gbedu --timeout=120s
+
+# Verify health
+curl https://api.gbedu.com/ready
+```
+
+**Data loss assessment (run on former primary if still reachable):**
+
+```bash
+# How many WAL bytes were not replicated at time of failure
+sudo -u postgres psql -c "
+  SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS unsynced_bytes
+  FROM pg_stat_replication;
+"
+```
+
+| Target | Value |
+|--------|-------|
+| RTO | 5 minutes |
+| RPO | 0 (synchronous replication) or < 30s (async) |
+
+---
+
+### DR-2: Redis Cluster Failure
+
+**Detection:** `redis_connected_clients == 0` for 1m, or all Celery workers show idle with no task throughput.
+
+**Impact assessment:**
+- Rate limiting fails open — traffic continues to be served (no immediate user impact)
+- Session tokens may be unverifiable until Redis recovers — users may be force-logged out
+- Quota counters (daily generation limits) reset to 0 — users effectively get a fresh daily quota
+
+**Restart Redis:**
+
+```bash
+kubectl rollout restart deployment/redis -n gbedu
+kubectl rollout status deployment/redis -n gbedu --timeout=60s
+```
+
+**If data is corrupt and a clean slate is required:**
+
+```bash
+# DESTRUCTIVE — quota counters reset, active sessions invalidated
+kubectl exec -it deployment/redis -n gbedu -- redis-cli FLUSHALL
+```
+
+After FLUSHALL: quota counters reset to 0 (users get fresh daily quota), all sessions require re-login. Alert the team in `#incidents` before doing this.
+
+| Target | Value |
+|--------|-------|
+| RTO | 2 minutes |
+| RPO | Non-critical — all Redis data is ephemeral or reconstructable from Postgres |
+
+---
+
+### DR-3: Celery Worker Deadlock / Queue Saturation
+
+**Detection:** `celery_queue_length{queue="generation"} > 100` sustained for 5m, or generations are accepted but never complete.
+
+**Inspect active and stuck tasks:**
+
+```bash
+kubectl exec -it deployment/gbedu-worker -n gbedu -- \
+  celery -A gbedu_worker.celery_app inspect active
+
+kubectl exec -it deployment/gbedu-worker -n gbedu -- \
+  celery -A gbedu_worker.celery_app inspect reserved
+```
+
+**Revoke a specific stuck task:**
+
+```bash
+kubectl exec -it deployment/gbedu-worker -n gbedu -- \
+  celery -A gbedu_worker.celery_app control revoke <task_id> --terminate
+```
+
+**Drain the generation queue without processing (emergency only — tasks are discarded):**
+
+```bash
+kubectl exec -it deployment/gbedu-worker -n gbedu -- \
+  celery -A gbedu_worker.celery_app purge -Q generation --force
+```
+
+**Scale workers to clear a backlog:**
+
+```bash
+kubectl scale deployment/gbedu-worker --replicas=10 -n gbedu
+# Scale back to normal after backlog clears
+kubectl scale deployment/gbedu-worker --replicas=3 -n gbedu
+```
+
+**Inspect the dead letter queue:**
+
+```bash
+kubectl exec -it deployment/gbedu-api -n gbedu -- \
+  redis-cli -u "$REDIS_URL" LRANGE gbedu.dlq 0 9
+```
+
+---
+
+### DR-4: R2 Storage Unavailability
+
+**Detection:** API returns 502 on track upload or download endpoints; `gbedu_storage_errors_total` counter spikes in Grafana.
+
+**Impact:** New uploads fail with 502. Presigned URLs for existing tracks continue to work (served by Cloudflare CDN edge cache, not R2 directly).
+
+**Check Cloudflare status first:**
+
+```
+https://www.cloudflarestatus.com
+```
+
+**Production mitigation (queue uploads for replay):**
+
+When R2 is unavailable, the `storage_service.py` fallback queues failed uploads as Celery tasks with `retry_failed_distributions` task name. Once R2 recovers:
+
+```bash
+# Verify R2 is back
+aws s3 ls s3://gbedu-models/ --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+
+# Trigger retry of queued upload tasks
+kubectl exec -it deployment/gbedu-worker -n gbedu -- \
+  celery -A gbedu_worker.celery_app call gbedu_worker.tasks.storage.retry_failed_distributions
+```
+
+**Development only — local disk fallback (never use in production):**
+
+```bash
+# Routes storage through local filesystem — NOT production-safe
+kubectl set env deployment/gbedu-api -n gbedu STORAGE_BACKEND=local
+```
+
+Revert immediately once R2 recovers: `kubectl set env deployment/gbedu-api -n gbedu STORAGE_BACKEND=r2`.
+
+---
+
+### DR-5: ML Service GPU OOM / Model Corruption
+
+**Detection:** `gbedu_ml_circuit_breaker_state{model="ace_step"} == 1` (circuit breaker open), or `gbedu-ml` pod in `CrashLoopBackOff`.
+
+**Restart the ML pod (clears GPU memory state):**
+
+```bash
+kubectl rollout restart deployment/gbedu-ml -n gbedu
+kubectl rollout status deployment/gbedu-ml -n gbedu --timeout=600s
+curl https://ml.gbedu.com/health
+```
+
+**If the pod crashes again on startup (corrupt model cache):**
+
+```bash
+# Clear the ACE-Step model cache to force a clean re-download from HF Hub
+kubectl exec -it deploy/gbedu-ml -n gbedu -- rm -rf /models/ace-step/
+
+# Then restart — model re-downloads on first request (~15 min cold start)
+kubectl rollout restart deployment/gbedu-ml -n gbedu
+```
+
+**Model weight rollback (bad weights from a recent fine-tuning deploy):**
+
+```bash
+# Previous version is preserved at:
+# s3://gbedu-models/ace-step/v1.5-prev.tar.gz
+kubectl set env deployment/gbedu-ml -n gbedu \
+  ACE_STEP_LORA_PATH=s3://gbedu-models/ace-step/v1.5-prev.tar.gz
+kubectl rollout status deployment/gbedu-ml -n gbedu --timeout=600s
+```
+
+**Fallback chain:** If circuit breakers for ACE-Step, StableAudio, and YuE are all open simultaneously, the generation endpoint returns HTTP 503 with a user-visible message: `"Generation temporarily unavailable — please try again in a few minutes."` No silent failures.
+
+---
+
+### DR-6: Complete Service Restoration Procedure
+
+Use this when recovering from a full outage (all services down). Restore in dependency order — each step must pass its health check before proceeding to the next.
+
+**Step 1 — PostgreSQL**
+
+```bash
+# Confirm Postgres is accepting connections
+kubectl exec -it deployment/gbedu-api -n gbedu -- \
+  python -c "import asyncpg, asyncio; asyncio.run(asyncpg.connect('$DATABASE_URL'))"
+# Or check directly:
+kubectl get pods -n gbedu -l app=postgres
+```
+
+**Step 2 — Redis**
+
+```bash
+kubectl rollout status deployment/redis -n gbedu --timeout=60s
+kubectl exec -it deployment/redis -n gbedu -- redis-cli PING
+# Expected: PONG
+```
+
+**Step 3 — LocalStack (dev) / R2 (prod)**
+
+```bash
+# Development
+curl http://localhost:4566/_localstack/health
+
+# Production — verify R2 reachability
+aws s3 ls s3://gbedu-models/ --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+```
+
+**Step 4 — API service**
+
+```bash
+kubectl rollout restart deployment/gbedu-api -n gbedu
+kubectl rollout status deployment/gbedu-api -n gbedu --timeout=120s
+curl https://api.gbedu.com/health   # expect: {"status":"ok"}
+curl https://api.gbedu.com/ready    # expect: all components green
+```
+
+**Step 5 — Worker service**
+
+```bash
+kubectl rollout restart deployment/gbedu-worker -n gbedu
+kubectl rollout status deployment/gbedu-worker -n gbedu --timeout=120s
+# Verify worker is consuming
+kubectl exec -it deployment/gbedu-worker -n gbedu -- \
+  celery -A gbedu_worker.celery_app inspect ping
+```
+
+**Step 6 — ML service**
+
+```bash
+kubectl rollout restart deployment/gbedu-ml -n gbedu
+# Allow up to 10 minutes for model weight download on cold start
+kubectl rollout status deployment/gbedu-ml -n gbedu --timeout=600s
+curl https://ml.gbedu.com/health    # expect: {"status":"ok","models":{...}}
+```
+
+**Step 7 — Web frontend**
+
+```bash
+kubectl rollout restart deployment/gbedu-web -n gbedu
+kubectl rollout status deployment/gbedu-web -n gbedu --timeout=120s
+curl -I https://app.gbedu.com       # expect: HTTP 200
+```
+
+**Estimated total RTO: 15 minutes** (dominated by ML model load time in step 6).
+
+Post-restoration: run a smoke test generation end-to-end before declaring the incident resolved.
+
+---
+
+### DR-7: Stripe Webhook Backfill
+
+Use this when the API server was down during a period of Stripe activity — missed webhook events mean payments, subscription upgrades, or cancellations may not have been processed.
+
+**Identify the outage window:** note the exact UTC start and end times from PagerDuty or Grafana.
+
+**Replay missed events from Stripe dashboard:**
+
+1. Go to Stripe Dashboard → Developers → Webhooks → select the production endpoint.
+2. Filter events by the outage window timestamp range.
+3. For each missed event, click "Resend" — or use the CLI:
+
+```bash
+# Replay a specific event by ID
+stripe events resend evt_XXXXXXXXXXXXXXXXXXXXXXXX
+
+# List events in a time window and replay all (requires stripe CLI + jq)
+stripe events list \
+  --created[gte]=<unix_timestamp_start> \
+  --created[lte]=<unix_timestamp_end> \
+  --limit 100 \
+  | jq -r '.data[].id' \
+  | xargs -I{} stripe events resend {}
+```
+
+**Idempotency guarantee:** All webhook handlers check Redis `SET NX` (set-if-not-exists) using the Stripe event ID as the key before processing. Replaying events is safe — duplicate deliveries are silently deduplicated. No risk of double-charging.
+
+**Verify backfill completed:**
+
+```bash
+# Check webhook delivery status in Stripe dashboard — all events should show "Succeeded"
+# Also verify in the application DB that payment records match Stripe:
+kubectl exec -it deployment/gbedu-api -n gbedu -- \
+  python -c "
+from gbedu_core.scripts import reconcile_stripe
+import asyncio
+asyncio.run(reconcile_stripe.run(since_hours=24))
+"
+```

@@ -20,7 +20,7 @@ from gbedu_api.config import API_VERSION, get_settings
 from gbedu_api.deps import limiter, set_ml_client, set_redis, set_storage_client
 from gbedu_api.middleware.logging import StructlogMiddleware
 from gbedu_api.middleware.request_id import RequestIDMiddleware
-from gbedu_api.routers import auth, generations, health, marketplace, payments, tracks, users, voice_models
+from gbedu_api.routers import auth, contact, generations, health, marketplace, payments, tracks, users, voice_models
 from gbedu_core.config import get_settings as core_settings
 from gbedu_core.db import get_engine, init_db
 from gbedu_core.errors import GbeduError
@@ -104,8 +104,8 @@ def create_app() -> FastAPI:
 		CORSMiddleware,
 		allow_origins=settings.allowed_origins_list,
 		allow_credentials=True,
-		allow_methods=["*"],
-		allow_headers=["*"],
+		allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+		allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Request-ID", "Cache-Control"],
 	)
 
 	# OpenTelemetry ASGI middleware is applied via instrumentor after app creation
@@ -168,8 +168,21 @@ def create_app() -> FastAPI:
 	app.include_router(payments.router, prefix=_prefix)
 	app.include_router(marketplace.router, prefix=_prefix)
 	app.include_router(voice_models.router, prefix=_prefix)
+	app.include_router(contact.router, prefix=_prefix)
 
-	# Instrument after routers are registered so spans include route templates
+	# Instrument after routers are registered so spans include route templates.
+	# Patch _get_route_details to guard against _IncludedRouter objects that lack
+	# a .path attribute (opentelemetry-instrumentation-fastapi <= 0.48b0 bug).
+	import opentelemetry.instrumentation.fastapi as _otel_fastapi
+	_orig_get_route = _otel_fastapi._get_route_details
+
+	def _safe_get_route_details(scope):  # type: ignore[no-untyped-def]
+		try:
+			return _orig_get_route(scope)
+		except AttributeError:
+			return None, {}
+
+	_otel_fastapi._get_route_details = _safe_get_route_details
 	FastAPIInstrumentor.instrument_app(app)
 
 	return app

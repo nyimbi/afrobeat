@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Your track is ready — Gbẹdu{% endblock %}
+{% block content %}
+<p class="greeting">Your track is ready, {{ user_name }} 🎵</p>
+<p class="body-text">
+  <strong style="color:#F4F4F5;">{{ track_title }}</strong> just finished generating.
+  Head to your library to listen, download the stems, or share it with the world.
+</p>
+<div class="cta-wrap">
+  <a href="{{ track_url }}" class="cta-btn">Listen now</a>
+</div>
+{% if preview_url %}
+<div class="divider"></div>
+<p class="meta-text">
+  You can also preview a watermarked version at:<br />
+  <a href="{{ preview_url }}" style="color:#D4AF37;">{{ preview_url }}</a>
+</p>
+{% endif %}
+<div class="divider"></div>
+<p class="meta-text">
+  Download your stems, fine-tune the mix, or create a new variation — all from your
+  <a href="https://app.gbedu.io/library" style="color:#D4AF37;">Library</a>.
+</p>
+{% endblock %}

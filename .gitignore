@@ -105,6 +105,9 @@ generated/
 
 # ML model weights (large binaries — fetched from HuggingFace at runtime)
 models/
+# but keep Python source models packages in libs/
+!/libs/**/models/
+!/services/**/models/
 *.pt
 *.pth
 *.safetensors
@@ -127,6 +130,9 @@ docs/_build/
 # Config exceptions
 !setup.cfg
 !.isort.cfg
+
+# Local data (corpus downloads, mirrors — stored outside git)
+data/
 
 # Misc
 *.pid

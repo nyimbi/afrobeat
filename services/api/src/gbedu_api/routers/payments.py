@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 import httpx
@@ -204,6 +204,8 @@ async def _handle_stripe_event(event: dict[str, Any], db: AsyncSession) -> None:
 		await _stripe_subscription_cancel(data, db)
 	elif event_type == "invoice.payment_succeeded":
 		await _stripe_invoice_paid(data, db)
+	elif event_type == "checkout.session.completed":
+		await _stripe_checkout_beat_purchase(data, db)
 	else:
 		log.debug("stripe.webhook.unhandled_event", event_type=event_type)
 
@@ -289,6 +291,133 @@ async def _stripe_subscription_cancel(data: dict[str, Any], db: AsyncSession) ->
 		db.add(user)
 
 	await db.flush()
+
+
+_BEAT_DOWNLOAD_EXPIRES = 86400 * 3  # 72 hours — long enough for a slow download
+
+
+async def _stripe_checkout_beat_purchase(data: dict[str, Any], db: AsyncSession) -> None:
+	"""Handle checkout.session.completed when the session carries beat purchase metadata."""
+	meta = data.get("metadata", {})
+	if meta.get("purchase_type") != "beat":
+		return  # Subscription checkout — nothing to do here
+
+	listing_id = meta.get("listing_id", "")
+	buyer_id = meta.get("user_id", "")
+	if not listing_id or not buyer_id:
+		log.warning(
+			"stripe.checkout_completed.missing_beat_meta",
+			session_id=data.get("id"),
+			has_listing_id=bool(listing_id),
+			has_buyer_id=bool(buyer_id),
+		)
+		return
+
+	await _fulfil_beat_purchase(
+		listing_id=listing_id,
+		buyer_id=buyer_id,
+		provider="stripe",
+		provider_payment_id=data["id"],
+		amount_minor=data.get("amount_total", 0),
+		currency=(data.get("currency") or "usd").upper(),
+		db=db,
+	)
+
+
+async def _fulfil_beat_purchase(
+	listing_id: str,
+	buyer_id: str,
+	provider: str,
+	provider_payment_id: str,
+	amount_minor: int,
+	currency: str,
+	db: AsyncSession,
+) -> None:
+	"""Create a BeatPurchase record and generate a 72-hour presigned download URL.
+
+	Idempotent — a second call for the same (buyer_id, listing_id) pair is a
+	safe no-op.  The database unique constraint (buyer_id, listing_id) is a
+	second line of defence if the SELECT check is somehow bypassed.
+	"""
+	from gbedu_core.config import StorageSettings
+	from gbedu_core.models.marketplace import BeatListing, BeatPurchase, LicenseType, ListingStatus
+	from gbedu_core.models.track import Track
+	from gbedu_api.deps import get_storage
+
+	assert listing_id, "listing_id required"
+	assert buyer_id, "buyer_id required"
+	assert provider_payment_id, "provider_payment_id required"
+
+	listing_result = await db.execute(select(BeatListing).where(BeatListing.id == listing_id))
+	listing = listing_result.scalar_one_or_none()
+	if listing is None:
+		log.warning("beat_purchase.listing_not_found", listing_id=listing_id)
+		return
+
+	# Idempotency guard
+	existing_result = await db.execute(
+		select(BeatPurchase).where(
+			BeatPurchase.listing_id == listing_id,
+			BeatPurchase.buyer_id == buyer_id,
+		)
+	)
+	if existing_result.scalar_one_or_none() is not None:
+		log.info("beat_purchase.already_fulfilled", listing_id=listing_id, buyer_id=buyer_id)
+		return
+
+	# Load track to derive R2 key for the presigned URL
+	track_result = await db.execute(select(Track).where(Track.id == listing.track_id))
+	track = track_result.scalar_one_or_none()
+
+	download_url: str | None = None
+	download_expires_at: datetime | None = None
+
+	if track and track.audio_url:
+		try:
+			storage_settings = StorageSettings()
+			r2_public_url = storage_settings.r2_public_url.rstrip("/")
+			r2_key = track.audio_url.removeprefix(f"{r2_public_url}/")
+			storage = await get_storage()
+			download_url = await storage.get_presigned_url(r2_key, expires_in=_BEAT_DOWNLOAD_EXPIRES)
+			download_expires_at = datetime.now(timezone.utc) + timedelta(seconds=_BEAT_DOWNLOAD_EXPIRES)
+		except Exception as exc:
+			# Non-fatal: purchase record is still created. User can re-request
+			# via a dedicated endpoint when the link has expired.
+			log.error(
+				"beat_purchase.presign_failed",
+				listing_id=listing_id,
+				exc_type=type(exc).__name__,
+				exc_msg=str(exc),
+			)
+
+	purchase = BeatPurchase(
+		id=uuid7str(),
+		listing_id=listing_id,
+		buyer_id=buyer_id,
+		seller_id=listing.seller_id,
+		payment_provider=provider,
+		provider_payment_id=provider_payment_id,
+		amount_minor=amount_minor,
+		currency=currency,
+		license_type=listing.license_type,
+		download_url=download_url,
+		download_expires_at=download_expires_at,
+	)
+	db.add(purchase)
+
+	listing.purchase_count += 1
+	if listing.license_type == LicenseType.exclusive:
+		listing.status = ListingStatus.sold_out
+	db.add(listing)
+
+	await db.flush()
+	log.info(
+		"beat_purchase.fulfilled",
+		listing_id=listing_id,
+		buyer_id=buyer_id,
+		provider=provider,
+		has_download_url=download_url is not None,
+	)
 
 
 async def _stripe_invoice_paid(data: dict[str, Any], db: AsyncSession) -> None:
@@ -537,8 +666,23 @@ async def paystack_webhook(
 		if event_type == "charge.success":
 			data = event["data"]
 			meta = data.get("metadata", {})
-			user_id = meta.get("user_id")
-			if user_id:
+			user_id = meta.get("user_id", "")
+
+			if meta.get("purchase_type") == "beat":
+				# ── Marketplace beat purchase ──────────────────────────────────
+				listing_id = meta.get("listing_id", "")
+				if user_id and listing_id:
+					await _fulfil_beat_purchase(
+						listing_id=listing_id,
+						buyer_id=user_id,
+						provider="paystack",
+						provider_payment_id=data["reference"],
+						amount_minor=data["amount"],
+						currency=data["currency"],
+						db=db,
+					)
+			elif user_id:
+				# ── Subscription payment ───────────────────────────────────────
 				result = await db.execute(select(User).where(User.id == user_id))
 				user = result.scalar_one_or_none()
 				if user:
