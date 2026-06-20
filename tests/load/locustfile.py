@@ -30,8 +30,8 @@ from locust.clients import ResponseContextManager
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-_SUB_GENRES = ["afrobeats", "amapiano", "afropop", "highlife", "afrohouse"]
-_LANGUAGES  = ["english", "yoruba", "pidgin", "igbo", "hausa"]
+_SUB_GENRES = ["afrobeats", "amapiano_cross", "afropop", "highlife", "afrofusion", "alte"]
+_LANGUAGES  = ["english", "yoruba", "pidgin", "igbo", "swahili"]
 
 
 def _rand_email() -> str:

@@ -17,7 +17,7 @@ from gbedu_core._uuid7 import uuid7str
 from gbedu_core.errors import AuthorizationError, GbeduError, NotFoundError
 from gbedu_core.models.marketplace import BeatListing, BeatPurchase, LicenseType, ListingStatus
 from gbedu_core.models.payment import Payment, PaymentProvider, PaymentStatus
-from gbedu_core.models.track import Track, TrackStatus
+from gbedu_core.models.track import SubGenre, Track, TrackStatus
 from gbedu_core.models.user import SubscriptionTier, User
 
 log = structlog.get_logger(__name__)
@@ -120,7 +120,7 @@ async def browse_beats(
 	db: Annotated[AsyncSession, Depends(get_db)],
 	page: int = 1,
 	page_size: int = 20,
-	sub_genre: str | None = None,
+	sub_genre: SubGenre | None = None,
 	bpm_min: int | None = None,
 	bpm_max: int | None = None,
 	min_price_minor: int | None = None,
