@@ -435,6 +435,101 @@ _INSTRUMENTAL_PROMPTS = [
 ]
 
 
+# ── Audio stitching and mastering ─────────────────────────────────────────────
+
+def crossfade_stitch(
+    path_a: Path,
+    path_b: Path,
+    out_path: Path,
+    crossfade_s: float = 3.0,
+) -> Path:
+    """Concatenate two audio files with a cosine crossfade, matching sample rates.
+
+    path_a tail fades out while path_b head fades in over crossfade_s seconds.
+    Both files are normalized to stereo float32 before mixing.
+    Final output is peak-limited to -1 dBFS.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    audio_a, sr_a = sf.read(str(path_a), always_2d=True)
+    audio_b, sr_b = sf.read(str(path_b), always_2d=True)
+
+    # Resample b to match a if needed.
+    # Use soxr directly — librosa.resample lazy-loads numba which breaks on NumPy 2.4+.
+    if sr_a != sr_b:
+        import soxr
+        audio_b = soxr.resample(audio_b.astype(np.float32), sr_b, sr_a, quality="HQ")
+        sr_b = sr_a
+
+    sr = sr_a
+
+    # Normalise channel count to stereo
+    def _to_stereo(a: "np.ndarray") -> "np.ndarray":
+        if a.shape[1] == 1:
+            return np.repeat(a, 2, axis=1)
+        return a[:, :2]
+
+    audio_a = _to_stereo(audio_a)
+    audio_b = _to_stereo(audio_b)
+
+    cf = int(min(crossfade_s * sr, len(audio_a) * 0.25, len(audio_b) * 0.25))
+
+    # Cosine crossfade — less audible than linear
+    t = np.linspace(0.0, np.pi / 2, cf, dtype=np.float32)
+    fade_out = np.cos(t)[:, None]
+    fade_in  = np.sin(t)[:, None]
+
+    overlap = audio_a[-cf:] * fade_out + audio_b[:cf] * fade_in
+    result  = np.concatenate([audio_a[:-cf], overlap, audio_b[cf:]], axis=0)
+
+    # Peak limit to -1 dBFS
+    peak = float(np.abs(result).max())
+    if peak > 0.891:
+        result = result * (0.891 / peak)
+
+    sf.write(str(out_path), result.astype(np.float32), sr, subtype="FLOAT")
+    print(f"[gbedu] Stitched: {len(audio_a)/sr:.1f}s + {len(audio_b)/sr:.1f}s "
+          f"→ {len(result)/sr:.1f}s  ({crossfade_s}s crossfade)  → {out_path.name}")
+    return out_path
+
+
+def apply_congolese_master(path: Path, out_path: Path) -> Path:
+    """Pedalboard mastering chain tuned for Congolese Afro-rumba.
+
+    Afrobeats chain boosts low-end bass.  Congolese rumba needs a cleaner
+    midrange — the sebene guitar must cut through without mud.  So we:
+      • HP at 50 Hz (remove sub-rumble, keep warm bass)
+      • Moderate compression (3:1, slower attack — preserve transients)
+      • +2.5 dB peak at 2.8 kHz (sebene guitar presence)
+      • +1.5 dB high shelf at 10 kHz (brass air, choir shimmer)
+      • Brickwall limit at -1 dBFS
+    """
+    try:
+        import numpy as np
+        import soundfile as sf
+        from pedalboard import (
+            Compressor, HighpassFilter, HighShelfFilter,
+            Limiter, Pedalboard, PeakFilter,
+        )
+
+        audio, sr = sf.read(str(path), always_2d=True)
+        chain = Pedalboard([
+            HighpassFilter(cutoff_frequency_hz=50.0),
+            Compressor(threshold_db=-16.0, ratio=3.0, attack_ms=8.0, release_ms=150.0),
+            PeakFilter(cutoff_frequency_hz=2800.0, gain_db=2.5, q=1.0),
+            HighShelfFilter(cutoff_frequency_hz=10000.0, gain_db=1.5, q=0.707),
+            Limiter(threshold_db=-1.0, release_ms=100.0),
+        ])
+        processed = chain(audio.T.astype(np.float32), sample_rate=sr)
+        sf.write(str(out_path), processed.T, sr, subtype="FLOAT")
+        print(f"[gbedu] Mastering applied → {out_path.name}")
+        return out_path
+    except Exception as exc:
+        print(f"[gbedu] Mastering skipped ({type(exc).__name__}: {exc}), using stitched file")
+        return path
+
+
 # ── Instrumental path (MusicGen) ───────────────────────────────────────────────
 
 def _next_output_path(prefix: str, ext: str = "wav") -> Path:
@@ -564,6 +659,134 @@ def generate_vocals(
     return out_path
 
 
+# ── Full Congolese composition pipeline ───────────────────────────────────────
+
+# Vocal lyrics used in the full pipeline: verse1 → chorus → verse2 → chorus →
+# bridge (choir transition INTO the sebene) → outro.  No separate [bridge] tag
+# for the sebene itself — MusicGen generates that section independently.
+_CONGOLESE_FULL_LYRICS = """\
+[verse]
+I'm calling out across the water tonight
+My heart is heavy but my soul wants to fight
+From Kinshasa to the world I raise my voice
+The rhythm of the Congo is my only choice
+
+[chorus]
+Mayday mayday hear my prayer tonight
+Choir: Mayday, we are here
+Mayday mayday bring us to the light
+Choir: Mayday, do not fear
+We are rising we are never going down
+Choir: Rising, rising
+From the river to the mountains and the town
+Choir: Never stop, never stop
+
+[verse]
+The guitar starts to sing and the bass rolls low
+The ancestors are dancing in the evening glow
+Brass horns rising up like a morning sun
+This Congolese rumba says we all are one
+
+[chorus]
+Mayday mayday hear my prayer tonight
+Choir: Mayday, we are here
+Mayday mayday bring us to the light
+Choir: Mayday, do not fear
+We are rising we are never going down
+Choir: Rising, rising
+From the river to the mountains and the town
+Choir: Never stop, never stop
+
+[outro]
+Hear us calling
+Choir: Mayday o
+We are calling
+Choir: Mayday o
+From the Congo to the world
+Choir: Mayday, mayday o
+"""
+
+_SEBENE_PROMPT = (
+    "Congolese soukous sebene guitar instrumental break, 145 BPM, "
+    "rapid syncopated electric guitar riff, rhythm guitar comping, "
+    "driving walking bass guitar, conga and tumba polyrhythmic drums, "
+    "brass stabs, no vocals, no singing, no lyrics, pure instrumental dance break, "
+    "Kinshasa club sound, tight professional mix"
+)
+
+
+def generate_congolese_full(
+    duration_vocals: int = 60,
+    duration_sebene: int = 30,
+    crossfade_s: float = 3.0,
+    prompt_override: str | None = None,
+    lyrics_override: str | None = None,
+    infer_steps: int = 60,
+    model_size: str = "medium",
+    no_master: bool = False,
+) -> Path:
+    """Full Congolese composition: ACE-Step vocals → MusicGen sebene → crossfade stitch → master.
+
+    Structure:
+      [verse] [chorus] [verse] [chorus] [outro]  ←  ACE-Step vocal section
+                                    ↓ {crossfade_s}s cosine crossfade
+      ════ sebene break ════════════════════════  ←  MusicGen instrumental
+
+    The sebene section is generated separately as pure instrumental so the guitar
+    riff is clean and uncontaminated by vocal conditioning.  The crossfade lands
+    at the end of the vocal outro, where choir energy naturally recedes.
+    """
+    total_s = duration_vocals + duration_sebene - crossfade_s
+    print()
+    print("[gbedu] ═══════════════════════════════════════════════════════")
+    print("[gbedu]  Full Congolese Composition Pipeline")
+    print("[gbedu]  vocals (ACE-Step) ──crossfade──▶ sebene (MusicGen)")
+    print(f"[gbedu]  {duration_vocals}s vocals  +  {duration_sebene}s sebene  "
+          f"-  {crossfade_s}s crossfade  =  ~{total_s:.0f}s total")
+    print("[gbedu] ═══════════════════════════════════════════════════════")
+
+    # ── Step 1: vocal section ─────────────────────────────────────────────────
+    print(f"\n[gbedu] Step 1/3 — Vocal section  ({duration_vocals}s, ACE-Step {infer_steps} steps)")
+    vocal_path = generate_vocals(
+        style="congolese-choir",
+        duration=duration_vocals,
+        prompt_override=prompt_override,
+        lyrics_override=lyrics_override or _CONGOLESE_FULL_LYRICS,
+        language="english",
+        infer_steps=infer_steps,
+    )
+
+    # ── Step 2: sebene instrumental break ─────────────────────────────────────
+    print(f"\n[gbedu] Step 2/3 — Sebene instrumental  ({duration_sebene}s, MusicGen {model_size})")
+    sebene_path = generate_instrumental(
+        model_size=model_size,
+        duration=duration_sebene,
+        prompt=_SEBENE_PROMPT,
+    )
+
+    # ── Step 3: stitch + master ───────────────────────────────────────────────
+    print(f"\n[gbedu] Step 3/3 — Crossfade stitch + mastering")
+
+    # Place the stitched file next to the other outputs, with _stitched suffix
+    n = len(sorted(OUTPUT_DIR.glob("afrobeats_*.wav"))) + 1
+    stitched_path = OUTPUT_DIR / f"afrobeats_{n:03d}_stitched.wav"
+    crossfade_stitch(vocal_path, sebene_path, stitched_path, crossfade_s=crossfade_s)
+
+    if no_master:
+        final_path = stitched_path
+    else:
+        final_path = OUTPUT_DIR / f"afrobeats_{n:03d}_final.wav"
+        final_path = apply_congolese_master(stitched_path, final_path)
+
+    print()
+    print("[gbedu] ─────────────────────────────────────────────────────")
+    print(f"[gbedu]  Vocal section :  {vocal_path.name}  ({duration_vocals}s)")
+    print(f"[gbedu]  Sebene break  :  {sebene_path.name}  ({duration_sebene}s)")
+    print(f"[gbedu]  Final track   :  {final_path.name}  (~{total_s:.0f}s)")
+    print("[gbedu] ─────────────────────────────────────────────────────")
+    return final_path
+
+
 # ── Playback ───────────────────────────────────────────────────────────────────
 
 def play(path: Path) -> None:
@@ -580,11 +803,11 @@ def play(path: Path) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Generate an Afrobeats track (instrumental or with vocals)",
+        description="Generate an Afrobeats / Congolese track (instrumental, vocals, or full composition)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python generate_song.py                                         # instrumental, medium model
+  python generate_song.py                                          # instrumental, medium model
   python generate_song.py --model large --duration 45             # longer, higher quality
   python generate_song.py --vocals                                # Afrobeats choir, English, 30s
   python generate_song.py --vocals --style choir --language pidgin --duration 60
@@ -593,11 +816,15 @@ Examples:
   python generate_song.py --vocals --style congolese-choir --duration 60 --steps 60
   python generate_song.py --vocals --style soukous --fast         # fast ndombolo
   python generate_song.py --vocals --lyrics "$(cat my_lyrics.txt)"
+  python generate_song.py --full                                  # full Congolese composition
+  python generate_song.py --full --vocal-duration 90 --sebene-duration 45
+  python generate_song.py --full --fast --sebene-duration 20 --no-play
 """,
     )
 
     # Shared
-    p.add_argument("--duration", type=int, default=30, metavar="SEC")
+    p.add_argument("--duration", type=int, default=30, metavar="SEC",
+                   help="Duration for single-mode generation (default: 30)")
     p.add_argument("--prompt", type=str, default=None, metavar="TEXT")
     p.add_argument("--no-play", action="store_true")
 
@@ -623,9 +850,34 @@ Examples:
     voc.add_argument("--fast", action="store_true",
                      help="Shortcut for --steps 20 (good enough for demos)")
 
+    # Full composition mode
+    full = p.add_argument_group("full Congolese composition mode (--full)")
+    full.add_argument("--full", action="store_true",
+                      help="Multi-step pipeline: ACE-Step vocals → MusicGen sebene → crossfade → master")
+    full.add_argument("--vocal-duration", type=int, default=60, metavar="SEC",
+                      help="Vocal section length for --full (default: 60)")
+    full.add_argument("--sebene-duration", type=int, default=30, metavar="SEC",
+                      help="Sebene instrumental break length for --full (default: 30)")
+    full.add_argument("--crossfade", type=float, default=3.0, metavar="SEC",
+                      help="Crossfade overlap between vocal and sebene sections (default: 3.0)")
+    full.add_argument("--no-master", action="store_true",
+                      help="Skip the pedalboard mastering pass in --full mode")
+
     args = p.parse_args()
 
-    if args.vocals:
+    if args.full:
+        infer_steps = 20 if args.fast else args.steps
+        out_path = generate_congolese_full(
+            duration_vocals=args.vocal_duration,
+            duration_sebene=args.sebene_duration,
+            crossfade_s=args.crossfade,
+            prompt_override=args.prompt,
+            lyrics_override=args.lyrics,
+            infer_steps=infer_steps,
+            model_size=args.model,
+            no_master=args.no_master,
+        )
+    elif args.vocals:
         infer_steps = 20 if args.fast else args.steps
         out_path = generate_vocals(
             style=args.style,

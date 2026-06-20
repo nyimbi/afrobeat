@@ -142,3 +142,11 @@ data/
 .pot
 .omc/state/
 *.omc.jsonl
+
+# Redis RDB dump
+dump.rdb
+
+# Presentation / business files (binary)
+*.pdf
+*.pptx
+*.pdf

@@ -1,0 +1,201 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: staging
+        type: choice
+        options: [staging]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/gbedu
+
+jobs:
+  # ── Build + push all images ───────────────────────────────────────────────────
+
+  build-and-push:
+    name: Build + push (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [api, worker, ml, web]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ── Deploy to staging ─────────────────────────────────────────────────────────
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-and-push]
+    environment:
+      name: staging
+      url: https://staging-api.gbedu.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl (staging)
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+          context: staging-cluster
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Update deployments to new image tag
+        run: |
+          SHA="${{ steps.sha.outputs.short }}"
+          kubectl set image deployment/gbedu-api \
+            api=${{ env.IMAGE_PREFIX }}-api:${SHA} \
+            --namespace gbedu-staging
+          kubectl set image deployment/gbedu-worker \
+            worker=${{ env.IMAGE_PREFIX }}-worker:${SHA} \
+            --namespace gbedu-staging
+          kubectl set image deployment/gbedu-ml \
+            ml=${{ env.IMAGE_PREFIX }}-ml:${SHA} \
+            --namespace gbedu-staging
+          kubectl set image deployment/gbedu-web \
+            web=${{ env.IMAGE_PREFIX }}-web:${SHA} \
+            --namespace gbedu-staging
+
+      - name: Wait for rollouts (5 min timeout each)
+        run: |
+          kubectl rollout status deployment/gbedu-api \
+            --namespace gbedu-staging --timeout=300s
+          kubectl rollout status deployment/gbedu-worker \
+            --namespace gbedu-staging --timeout=300s
+          kubectl rollout status deployment/gbedu-ml \
+            --namespace gbedu-staging --timeout=300s
+          kubectl rollout status deployment/gbedu-web \
+            --namespace gbedu-staging --timeout=300s
+
+  # ── Smoke test ────────────────────────────────────────────────────────────────
+
+  smoke-test:
+    name: Smoke test — staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [deploy-staging]
+
+    steps:
+      - name: Wait for pods to stabilise
+        run: sleep 15
+
+      - name: Health check — /health (liveness)
+        run: |
+          for i in $(seq 1 10); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              https://staging-api.gbedu.io/api/v1/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Liveness check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS — retrying in 10s"
+            sleep 10
+          done
+          echo "Liveness check failed after 10 attempts"
+          exit 1
+
+      - name: Readiness check — /ready
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            https://staging-api.gbedu.io/api/v1/ready || echo "000")
+          if [ "$STATUS" != "200" ]; then
+            echo "Readiness probe failed: got $STATUS"
+            exit 1
+          fi
+          echo "Readiness probe passed"
+
+  # ── Notify ────────────────────────────────────────────────────────────────────
+
+  notify:
+    name: Slack notification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [smoke-test]
+    if: always()
+
+    steps:
+      - name: Resolve deploy status
+        id: status
+        run: |
+          if [ "${{ needs.smoke-test.result }}" = "success" ]; then
+            echo "emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
+            echo "color=good" >> "$GITHUB_OUTPUT"
+            echo "text=Staging deploy succeeded" >> "$GITHUB_OUTPUT"
+          else
+            echo "emoji=:x:" >> "$GITHUB_OUTPUT"
+            echo "color=danger" >> "$GITHUB_OUTPUT"
+            echo "text=Staging deploy FAILED" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post to Slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ steps.status.outputs.emoji }} *${{ steps.status.outputs.text }}*",
+              "attachments": [{
+                "color": "${{ steps.status.outputs.color }}",
+                "fields": [
+                  {"title": "Branch",  "value": "${{ github.ref_name }}", "short": true},
+                  {"title": "Commit",  "value": "<${{ github.event.head_commit.url }}|${{ github.sha }}>", "short": true},
+                  {"title": "Actor",   "value": "${{ github.actor }}", "short": true},
+                  {"title": "Run",     "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>", "short": true}
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
