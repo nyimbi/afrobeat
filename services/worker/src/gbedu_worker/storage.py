@@ -41,8 +41,8 @@ class R2Client:
 		async for attempt in AsyncRetrying(
 			stop=stop_after_attempt(3),
 			wait=wait_exponential(multiplier=2, min=2, max=30),
-			retry=retry_if_exception_type(Exception),
-			reraise=False,
+			retry=retry_if_exception_type(UploadError),
+			reraise=True,
 		):
 			with attempt:
 				try:

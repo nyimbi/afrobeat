@@ -1,5 +1,9 @@
+"use client"
+
+import { useState } from "react"
 import Link from "next/link"
-import { Music2, Zap, Globe2, Download, ChevronRight, Check } from "lucide-react"
+import type { Route } from "next"
+import { Music2, Zap, Globe2, Download, ChevronRight, Check, ChevronDown } from "lucide-react"
 
 // ---- Static demo tracks ----
 
@@ -149,6 +153,8 @@ function HeroWaveform() {
 // ---- Page ----
 
 export default function LandingPage() {
+	const [openFaq, setOpenFaq] = useState<number | null>(null)
+
 	return (
 		<div className="min-h-dvh bg-dark-bg-primary text-zinc-100 overflow-x-hidden">
 			{/* ===== NAVBAR ===== */}
@@ -351,7 +357,7 @@ export default function LandingPage() {
 						{[
 							{ value: "4,200+", label: "Creators" },
 							{ value: "180K+", label: "Tracks generated" },
-							{ value: "5", label: "Sub-genres" },
+							{ value: "16+", label: "Sub-genres" },
 							{ value: "< 60s", label: "Average generation" },
 						].map((stat) => (
 							<div key={stat.label}>
@@ -420,7 +426,7 @@ export default function LandingPage() {
 								</ul>
 
 								<Link
-									href={plan.href}
+									href={plan.href as Route<string>}
 									className={`block text-center py-2.5 rounded-xl text-sm font-semibold transition-all ${
 										plan.highlight
 											? "bg-afro-gold text-dark-bg-primary hover:bg-afro-gold-300"
@@ -445,16 +451,32 @@ export default function LandingPage() {
 						<h2 className="font-display text-3xl sm:text-4xl font-bold text-zinc-100">FAQ</h2>
 					</div>
 
-					<div className="space-y-4">
-						{FAQS.map((faq) => (
-							<div
-								key={faq.q}
-								className="rounded-xl glass border border-white/[0.07] p-5 space-y-2 hover:border-white/[0.12] transition-all"
-							>
-								<h3 className="font-semibold text-zinc-200 text-sm leading-snug">{faq.q}</h3>
-								<p className="text-sm text-zinc-500 leading-relaxed">{faq.a}</p>
-							</div>
-						))}
+					<div className="space-y-2">
+						{FAQS.map((faq, i) => {
+							const isOpen = openFaq === i
+							return (
+								<div
+									key={faq.q}
+									className="rounded-xl glass border border-white/[0.07] overflow-hidden transition-all hover:border-white/[0.12]"
+								>
+									<button
+										onClick={() => setOpenFaq(isOpen ? null : i)}
+										className="w-full flex items-center justify-between gap-4 p-5 text-left"
+										aria-expanded={isOpen}
+									>
+										<h3 className="font-semibold text-zinc-200 text-sm leading-snug">{faq.q}</h3>
+										<ChevronDown
+											className={`w-4 h-4 text-zinc-500 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+										/>
+									</button>
+									{isOpen && (
+										<div className="px-5 pb-5 animate-fade-in">
+											<p className="text-sm text-zinc-500 leading-relaxed">{faq.a}</p>
+										</div>
+									)}
+								</div>
+							)
+						})}
 					</div>
 				</div>
 			</section>

@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import type { Route } from "next"
 import { usePathname } from "next/navigation"
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu"
 import * as Avatar from "@radix-ui/react-avatar"
@@ -33,6 +34,7 @@ export function Navbar() {
 	const { user, isAuthenticated, logout } = useAuthStore()
 
 	return (
+		<>
 		<header className="fixed top-0 inset-x-0 z-50 h-16">
 			{/* Blurred backdrop */}
 			<div className="absolute inset-0 bg-dark-bg-primary/80 backdrop-blur-xl border-b border-white/[0.06]" />
@@ -64,7 +66,7 @@ export function Navbar() {
 							return (
 								<Link
 									key={href}
-									href={href}
+									href={href as Route<string>}
 									className={cn(
 										"flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
 										active
@@ -151,7 +153,7 @@ export function Navbar() {
 										].map(({ href, label, icon: Icon }) => (
 											<DropdownMenu.Item key={href} asChild>
 												<Link
-													href={href}
+													href={href as Route<string>}
 													className="flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-300 hover:text-zinc-100 hover:bg-white/[0.05] rounded-lg transition-colors cursor-pointer outline-none"
 												>
 													<Icon className="w-4 h-4" />
@@ -194,5 +196,30 @@ export function Navbar() {
 				</div>
 			</nav>
 		</header>
+
+		{/* Mobile bottom navigation — visible only on small screens when authenticated */}
+		{isAuthenticated && (
+			<nav className="sm:hidden fixed bottom-0 inset-x-0 z-50 h-16 bg-dark-bg-secondary/95 backdrop-blur-xl border-t border-white/[0.06]">
+				<div className="flex items-center justify-around h-full">
+					{NAV_LINKS.map(({ href, label, icon: Icon }) => {
+						const active = pathname.startsWith(href)
+						return (
+							<Link
+								key={href}
+								href={href as Route<string>}
+								className={cn(
+									"flex flex-col items-center justify-center gap-1 flex-1 h-full transition-colors",
+									active ? "text-afro-gold" : "text-zinc-600 hover:text-zinc-400",
+								)}
+							>
+								<Icon className="w-5 h-5" />
+								<span className="text-[10px] font-medium tracking-wide">{label}</span>
+							</Link>
+						)
+					})}
+				</div>
+			</nav>
+		)}
+		</>
 	)
 }

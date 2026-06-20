@@ -80,7 +80,7 @@ export default function LoginPage() {
 					<button
 						onClick={handleGoogleSignIn}
 						disabled={isGoogleLoading || isSubmitting}
-						className="w-full flex items-center justify-center gap-3 py-2.5 rounded-xl border border-white/[0.10] bg-white/[0.04] hover:bg-white/[0.08] text-sm font-medium text-zinc-200 transition-all disabled:opacity-60"
+						className="w-full flex items-center justify-center gap-3 py-2.5 rounded-xl border border-white/[0.10] bg-white/[0.04] hover:bg-white/[0.08] text-sm font-medium text-zinc-200 transition-all disabled:opacity-60 cursor-pointer"
 					>
 						{isGoogleLoading ? (
 							<Loader2 className="w-4 h-4 animate-spin" />
@@ -126,7 +126,7 @@ export default function LoginPage() {
 								type="email"
 								autoComplete="email"
 								className={cn(
-									"w-full px-3 py-2.5 rounded-lg bg-dark-bg-elevated border text-sm text-zinc-100 placeholder:text-zinc-600",
+									"w-full px-3 py-3 rounded-lg bg-dark-bg-elevated border text-sm text-zinc-100 placeholder:text-zinc-600",
 									"focus:outline-none focus:ring-1 focus:ring-afro-gold/60 transition-all",
 									errors.email ? "border-red-500/60" : "border-white/[0.08]",
 								)}
@@ -156,7 +156,7 @@ export default function LoginPage() {
 									type={showPassword ? "text" : "password"}
 									autoComplete="current-password"
 									className={cn(
-										"w-full px-3 py-2.5 pr-10 rounded-lg bg-dark-bg-elevated border text-sm text-zinc-100 placeholder:text-zinc-600",
+										"w-full px-3 py-3 pr-10 rounded-lg bg-dark-bg-elevated border text-sm text-zinc-100 placeholder:text-zinc-600",
 										"focus:outline-none focus:ring-1 focus:ring-afro-gold/60 transition-all",
 										errors.password ? "border-red-500/60" : "border-white/[0.08]",
 									)}
@@ -165,7 +165,7 @@ export default function LoginPage() {
 								<button
 									type="button"
 									onClick={() => setShowPassword((v) => !v)}
-									className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+									className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
 									aria-label={showPassword ? "Hide password" : "Show password"}
 								>
 									{showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -177,7 +177,7 @@ export default function LoginPage() {
 						</div>
 
 						{serverError && (
-							<div className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2">
+							<div role="alert" className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2">
 								<p className="text-xs text-red-400">{serverError}</p>
 							</div>
 						)}
@@ -185,10 +185,10 @@ export default function LoginPage() {
 						<button
 							type="submit"
 							disabled={isSubmitting || isGoogleLoading}
-							className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-afro-gold text-dark-bg-primary font-semibold text-sm hover:bg-afro-gold-300 transition-colors disabled:opacity-60 animate-pulse-gold"
+							className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-afro-gold text-dark-bg-primary font-semibold text-sm hover:bg-afro-gold-300 hover:shadow-gold transition-all disabled:opacity-60 cursor-pointer"
 						>
 							{isSubmitting ? (
-								<Loader2 className="w-4 h-4 animate-spin" />
+								<><Loader2 className="w-4 h-4 animate-spin" />Signing in...</>
 							) : (
 								"Sign in"
 							)}

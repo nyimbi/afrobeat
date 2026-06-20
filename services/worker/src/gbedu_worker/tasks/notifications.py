@@ -266,10 +266,18 @@ class _SmtpEmailService:
 
 	@staticmethod
 	def _render_template(template: str, context: dict[str, Any]) -> str:
-		# Minimal template rendering — replace {key} placeholders.
-		# Production: use Jinja2 with HTML email templates.
-		lines = [f"<p>{k}: {v}</p>" for k, v in context.items()]
-		return f"<html><body>{''.join(lines)}</body></html>"
+		from pathlib import Path
+		from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+		template_dir = Path(__file__).parent.parent / "templates" / "email"
+		env = Environment(
+			loader=FileSystemLoader(str(template_dir)),
+			autoescape=select_autoescape(["html"]),
+			trim_blocks=True,
+			lstrip_blocks=True,
+		)
+		tmpl = env.get_template(f"{template}.html")
+		return tmpl.render(**context)
 
 
 # ── Redis dedup helpers ────────────────────────────────────────────────────────

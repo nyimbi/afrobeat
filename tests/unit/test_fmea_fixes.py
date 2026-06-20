@@ -93,7 +93,7 @@ async def _make_redis_mock(set_returns: bool) -> AsyncMock:
 
 async def test_stripe_webhook_atomic_claim_on_first_delivery() -> None:
 	"""First delivery claims the key with SET NX and proceeds to handle the event."""
-	from services.api.src.gbedu_api.routers.payments import stripe_webhook  # type: ignore[import]
+	from gbedu_api.routers.payments import stripe_webhook
 
 	redis = await _make_redis_mock(set_returns=True)  # SET NX succeeds → we claimed it
 
@@ -120,7 +120,7 @@ async def test_stripe_webhook_atomic_claim_on_first_delivery() -> None:
 
 async def test_stripe_webhook_duplicate_rejected_atomically() -> None:
 	"""Second delivery gets SET NX=False and is returned 'already_processed' without handling."""
-	from services.api.src.gbedu_api.routers.payments import stripe_webhook  # type: ignore[import]
+	from gbedu_api.routers.payments import stripe_webhook
 
 	redis = await _make_redis_mock(set_returns=False)  # SET NX fails → already claimed
 
@@ -146,7 +146,7 @@ async def test_stripe_webhook_duplicate_rejected_atomically() -> None:
 async def test_stripe_webhook_releases_claim_on_handler_failure() -> None:
 	"""If the event handler raises, the idempotency key is deleted so Stripe can retry."""
 	from fastapi import HTTPException
-	from services.api.src.gbedu_api.routers.payments import stripe_webhook  # type: ignore[import]
+	from gbedu_api.routers.payments import stripe_webhook
 
 	redis = await _make_redis_mock(set_returns=True)
 

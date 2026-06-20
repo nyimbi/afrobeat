@@ -13,6 +13,10 @@ from gbedu_ml.language.quality_gate import (
 	QualityGateResult,
 	_PIDGIN_MARKER_MIN_RATE,
 	_YORUBA_CHAR_MIN_DENSITY,
+	_SWAHILI_MARKER_MIN_RATE,
+	_LINGALA_MARKER_MIN_RATE,
+	_ZULU_MARKER_MIN_RATE,
+	_TWI_CHAR_MIN_DENSITY,
 )
 from gbedu_ml.language.pidgin_patterns import (
 	PidginPatternLibrary,
@@ -379,6 +383,177 @@ class TestInjectPidginFlavor:
 		# Result should be non-empty and a string
 		assert isinstance(result, str)
 		assert len(result) > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Swahili gate tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_GOOD_SWAHILI = (
+	"Nakupenda wewe peke yako, mimi na sisi pamoja, "
+	"asante kwa furaha yote lakini bado sijui mbona, "
+	"ndiyo nakupenda kweli sawa na moyo wangu yote, "
+	"jambo rafiki yangu karibu haraka hapana huzuni."
+)
+
+_ENGLISH_NOT_SWAHILI = (
+	"I love you so much and I want to be with you forever, "
+	"the music plays on and the night is young and bright, "
+	"we dance together under the stars and feel alive now, "
+	"every moment with you is a blessing I cherish deeply."
+)
+
+
+class TestSwahiliGatePasses:
+	def test_authentic_swahili_passes(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_swahili(_GOOD_SWAHILI)
+		assert result.passed is True
+
+	def test_marker_rate_above_threshold(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_swahili(_GOOD_SWAHILI)
+		assert result.marker_rate is not None
+		assert result.marker_rate >= _SWAHILI_MARKER_MIN_RATE
+
+	def test_confidence_above_half_when_passing(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_swahili(_GOOD_SWAHILI)
+		assert result.confidence >= 0.5
+
+
+class TestSwahiliGateFails:
+	def test_english_fails(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_swahili(_ENGLISH_NOT_SWAHILI)
+		assert result.passed is False
+
+	def test_short_text_fails(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_swahili("nakupenda wewe")
+		assert result.passed is False
+		assert "too short" in result.reason
+
+	def test_empty_assertion(self, gate: PidginYorubaQualityGate) -> None:
+		with pytest.raises(AssertionError):
+			gate.check_swahili("")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Lingala gate tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_GOOD_LINGALA = (
+	"Bolingo na yo elongi mpenza, mbote ndeko biso nakobina, "
+	"ntango nyonso nzoto na ngai eloko mwana sango na biso, "
+	"nakozela yo lelo mpenza boye liwa te nakokoma penza, "
+	"lobi nakobina na yo bolingo mbote elongi na ngai biso."
+)
+
+
+class TestLingalaGatePasses:
+	def test_authentic_lingala_passes(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_lingala(_GOOD_LINGALA)
+		assert result.passed is True
+
+	def test_marker_rate_above_threshold(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_lingala(_GOOD_LINGALA)
+		assert result.marker_rate is not None
+		assert result.marker_rate >= _LINGALA_MARKER_MIN_RATE
+
+	def test_confidence_above_half_when_passing(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_lingala(_GOOD_LINGALA)
+		assert result.confidence >= 0.5
+
+
+class TestLingalaGateFails:
+	def test_english_fails(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_lingala(_ENGLISH_NOT_SWAHILI)
+		assert result.passed is False
+
+	def test_empty_assertion(self, gate: PidginYorubaQualityGate) -> None:
+		with pytest.raises(AssertionError):
+			gate.check_lingala("")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Zulu gate tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_GOOD_ZULU = (
+	"Sawubona wena ngiyabonga thina ubuntu uthando laduma yebo, "
+	"hayi mina ngikhona siyabonga abantu amandla injabulo woza, "
+	"ngiyakuthanda wena thina ubuntu sawubona umuntu bayete yebo, "
+	"laduma amandla uthando injabulo siyabonga woza mina ngiyabonga."
+)
+
+
+class TestZuluGatePasses:
+	def test_authentic_zulu_passes(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_zulu(_GOOD_ZULU)
+		assert result.passed is True
+
+	def test_marker_rate_above_threshold(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_zulu(_GOOD_ZULU)
+		assert result.marker_rate is not None
+		assert result.marker_rate >= _ZULU_MARKER_MIN_RATE
+
+	def test_confidence_above_half_when_passing(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_zulu(_GOOD_ZULU)
+		assert result.confidence >= 0.5
+
+
+class TestZuluGateFails:
+	def test_english_fails(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_zulu(_ENGLISH_NOT_SWAHILI)
+		assert result.passed is False
+
+	def test_empty_assertion(self, gate: PidginYorubaQualityGate) -> None:
+		with pytest.raises(AssertionError):
+			gate.check_zulu("")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Twi gate tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_GOOD_TWI = (
+	"Me dɔ wo sɛ ɔkwan bi yɛn ɛso ɔhene ɛne wo, "
+	"akwaaba medaase ɔpanyin ɛfiri ɔman no mu ɛ, "
+	"yɛn ɔdɔ no yɛ dɛ sɛ ɛwɔ ɔkwan bi so yɛ, "
+	"ɔbaa no ɛne me ɔdɔ yɛn ɛnɔ ɔman no mu."
+)
+
+_ASCII_NOT_TWI = (
+	"Me do wo se okwan bi yen eso ohene ene wo akwaaba, "
+	"medaase opanyin efiri oman no mu nkoso yie, "
+	"yen odo no ye de se ewo okwan bi so ye, "
+	"obaa no ene me odo yen eno oman no mu."
+)
+
+
+class TestTwiGatePasses:
+	def test_authentic_twi_passes(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_twi(_GOOD_TWI)
+		assert result.passed is True
+
+	def test_char_density_above_threshold(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_twi(_GOOD_TWI)
+		assert result.char_density is not None
+		assert result.char_density >= _TWI_CHAR_MIN_DENSITY
+
+	def test_confidence_above_half_when_passing(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_twi(_GOOD_TWI)
+		assert result.confidence >= 0.4
+
+
+class TestTwiGateFails:
+	def test_ascii_pseudo_twi_fails(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_twi(_ASCII_NOT_TWI)
+		assert result.passed is False
+
+	def test_char_density_zero_for_ascii(self, gate: PidginYorubaQualityGate) -> None:
+		result = gate.check_twi(_ASCII_NOT_TWI)
+		assert result.char_density == 0.0
+
+	def test_empty_assertion(self, gate: PidginYorubaQualityGate) -> None:
+		with pytest.raises(AssertionError):
+			gate.check_twi("")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -31,6 +31,10 @@ from gbedu_core.security import (
 
 log = structlog.get_logger(__name__)
 
+# Valid bcrypt hash used for constant-time comparison when a user is not found,
+# preventing timing-based email enumeration. Computed once at module load.
+_DUMMY_HASH: str = hash_password("__gbedu_timing_sentinel__")
+
 _REFRESH_BLOCKLIST_PREFIX = "refresh_blocklist:"
 _EMAIL_VERIFY_PREFIX = "email_verify:"
 _RESET_TOKEN_PREFIX = "password_reset:"
@@ -113,8 +117,7 @@ class AuthService:
 		user = result.scalar_one_or_none()
 
 		# Evaluate password even when user is None to prevent timing attacks
-		_dummy_hash = "$2b$12$notahash"
-		hashed = user.hashed_password if user else _dummy_hash
+		hashed = user.hashed_password if user else _DUMMY_HASH
 		valid = verify_password(password, hashed) if hashed else False
 
 		if not user or not valid:

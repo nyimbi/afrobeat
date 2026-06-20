@@ -9,10 +9,12 @@ from typing import Any, AsyncIterator
 import structlog
 import torch
 from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
+from pydantic import BaseModel
 from fastapi.security import APIKeyHeader
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
+from gbedu_core.config import StorageSettings
 from gbedu_core.errors import GenerationError
 from gbedu_core.schemas import GenerationRequest
 from gbedu_core.telemetry import configure_telemetry, get_tracer, record_generation_duration, increment_generation_count, increment_error_count
@@ -262,4 +264,160 @@ async def generate(
 		"duration_seconds": result.duration_seconds,
 		"elapsed_seconds": result.elapsed_seconds,
 		"metadata": result.metadata,
+	}
+
+
+# ── Voice training endpoint ────────────────────────────────────────────────────
+
+class _VoiceTrainRequest(BaseModel):
+	voice_model_id: str
+	training_audio_urls: list[str]
+	training_config: dict[str, Any] = {}
+
+
+@app.post("/voice/train", tags=["voice"], status_code=200)
+async def voice_train(
+	request: _VoiceTrainRequest,
+	_: str = Depends(_require_api_key),
+) -> dict[str, Any]:
+	"""Train an RVC v2 voice model from audio sample URLs.
+
+	Downloads audio from presigned GET URLs, runs RVC v2 training on GPU,
+	uploads the .pth and .index artifacts to R2, and returns their public URLs.
+
+	Long-running — callers must use a timeout of at least 4 hours.
+	"""
+	import tempfile
+	import time as _time
+	import httpx
+	import boto3
+
+	assert request.voice_model_id, "voice_model_id required"
+	assert request.training_audio_urls, "training_audio_urls must not be empty"
+
+	tracer = get_tracer()
+	t0 = _time.perf_counter()
+
+	with tracer.start_as_current_span("gbedu.voice_train") as span:
+		span.set_attribute("voice_model.id", request.voice_model_id)
+		span.set_attribute("voice_model.sample_count", len(request.training_audio_urls))
+
+		log.info(
+			"voice_train.start",
+			voice_model_id=request.voice_model_id,
+			sample_count=len(request.training_audio_urls),
+		)
+
+		with tempfile.TemporaryDirectory(prefix="gbedu_voice_") as tmp_dir:
+			tmp_path = Path(tmp_dir)
+
+			# ── Step 1: Download training audio from presigned URLs ─────────
+			voice_samples: list[Path] = []
+			async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)) as client:
+				for idx, url in enumerate(request.training_audio_urls):
+					sample_path = tmp_path / f"sample_{idx:03d}.wav"
+					try:
+						resp = await client.get(url)
+						resp.raise_for_status()
+						sample_path.write_bytes(resp.content)
+						voice_samples.append(sample_path)
+						log.debug("voice_train.sample.downloaded", idx=idx, bytes=len(resp.content))
+					except Exception as exc:
+						log.warning("voice_train.sample.download_failed", idx=idx, exc=str(exc))
+						raise HTTPException(
+							status_code=502,
+							detail=f"Failed to download training sample {idx}: {exc}",
+						)
+
+			# ── Step 2: Run RVC v2 training ────────────────────────────────
+			output_model_path = tmp_path / request.voice_model_id
+
+			if not _vocal_synth.is_loaded:
+				raise HTTPException(
+					status_code=503,
+					detail="Vocal synthesizer (RVC) not available on this instance",
+				)
+
+			try:
+				await _vocal_synth.train_user_voice(
+					voice_samples=voice_samples,
+					output_model_path=output_model_path,
+				)
+			except Exception as exc:
+				log.error("voice_train.training.failed", voice_model_id=request.voice_model_id, exc=str(exc))
+				span.record_exception(exc)
+				raise HTTPException(status_code=500, detail=f"RVC training failed: {exc}")
+
+			# Expected artifacts from RVC trainer
+			pth_path = output_model_path.with_suffix(".pth")
+			index_path = output_model_path.with_suffix(".index")
+
+			if not pth_path.exists():
+				raise HTTPException(
+					status_code=500,
+					detail=f"Training completed but .pth artifact not found at {pth_path}",
+				)
+
+			# ── Step 3: Upload artifacts to R2 ─────────────────────────────
+			storage = StorageSettings()
+			s3 = boto3.client(
+				"s3",
+				endpoint_url=storage.r2_endpoint_url,
+				aws_access_key_id=storage.r2_access_key_id,
+				aws_secret_access_key=storage.r2_secret_access_key,
+				region_name="auto",
+			)
+
+			r2_prefix = f"voice-models/{request.voice_model_id}"
+
+			loop = asyncio.get_event_loop()
+
+			pth_key = f"{r2_prefix}/model.pth"
+			await loop.run_in_executor(
+				None,
+				lambda: s3.upload_file(
+					str(pth_path),
+					storage.r2_bucket_name,
+					pth_key,
+					ExtraArgs={"ContentType": "application/octet-stream"},
+				),
+			)
+			model_file_url = f"{storage.r2_public_url}/{pth_key}"
+			log.info("voice_train.pth.uploaded", key=pth_key)
+
+			index_file_url: str | None = None
+			if index_path.exists():
+				index_key = f"{r2_prefix}/model.index"
+				await loop.run_in_executor(
+					None,
+					lambda: s3.upload_file(
+						str(index_path),
+						storage.r2_bucket_name,
+						index_key,
+						ExtraArgs={"ContentType": "application/octet-stream"},
+					),
+				)
+				index_file_url = f"{storage.r2_public_url}/{index_key}"
+				log.info("voice_train.index.uploaded", key=index_key)
+
+		elapsed = _time.perf_counter() - t0
+		metrics: dict[str, Any] = {
+			"training_duration_seconds": round(elapsed, 1),
+			"sample_count": len(request.training_audio_urls),
+			"model_id": request.voice_model_id,
+			"has_index": index_file_url is not None,
+		}
+
+		log.info(
+			"voice_train.complete",
+			voice_model_id=request.voice_model_id,
+			elapsed_seconds=round(elapsed, 1),
+			model_file_url=model_file_url,
+		)
+
+	return {
+		"voice_model_id": request.voice_model_id,
+		"model_file_url": model_file_url,
+		"index_file_url": index_file_url,
+		"metrics": metrics,
 	}

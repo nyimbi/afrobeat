@@ -19,11 +19,22 @@ import { api } from "@/lib/api"
 import type { BeatListing, SubGenre } from "@/lib/types"
 
 const SUB_GENRES: { id: SubGenre; label: string; emoji: string }[] = [
-	{ id: "afropop", label: "Afropop", emoji: "🌟" },
-	{ id: "afrofusion", label: "Afrofusion", emoji: "🔥" },
-	{ id: "alte", label: "Alte", emoji: "🎸" },
-	{ id: "amapiano", label: "Amapiano", emoji: "🪗" },
-	{ id: "uk_afrobeats", label: "UK Afrobeats", emoji: "👑" },
+	{ id: "afrobeats",      label: "Afrobeats",    emoji: "🥁" },
+	{ id: "afropop",        label: "Afropop",       emoji: "🌟" },
+	{ id: "afrofusion",     label: "Afrofusion",    emoji: "🔥" },
+	{ id: "alte",           label: "Alte",          emoji: "🎸" },
+	{ id: "highlife",       label: "Highlife",      emoji: "🎺" },
+	{ id: "amapiano_cross", label: "Amapiano",      emoji: "🪗" },
+	{ id: "uk_afrobeats",   label: "UK Afrobeats",  emoji: "👑" },
+	{ id: "bongo_flava",    label: "Bongo Flava",   emoji: "🌊" },
+	{ id: "soukous",        label: "Soukous",       emoji: "⚡" },
+	{ id: "mbalax",         label: "Mbalax",        emoji: "🪘" },
+	{ id: "gengetone",      label: "Gengetone",     emoji: "🎤" },
+	{ id: "benga",          label: "Benga",         emoji: "🎵" },
+	{ id: "taarab",         label: "Taarab",        emoji: "🪕" },
+	{ id: "soca",           label: "Soca",          emoji: "🎉" },
+	{ id: "calypso",        label: "Calypso",       emoji: "🌴" },
+	{ id: "afro_soca",      label: "Afro-Soca",     emoji: "🌍" },
 ]
 
 const MUSICAL_KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -174,7 +185,7 @@ export default function MarketplacePage() {
 		<div className="min-h-dvh bg-dark-bg-primary flex flex-col">
 			<Navbar />
 
-			<main className="flex-1 pt-16 flex flex-col lg:flex-row">
+			<main className="flex-1 pt-16 pb-16 sm:pb-0 flex flex-col lg:flex-row">
 				{/* ===== FILTER SIDEBAR ===== */}
 				<aside
 					className={cn(
@@ -406,7 +417,7 @@ export default function MarketplacePage() {
 
 			{/* Playing beat mini-player */}
 			{playingBeat?.previewUrl && (
-				<div className="fixed bottom-0 inset-x-0 z-40 bg-dark-bg-secondary/95 backdrop-blur-xl border-t border-white/[0.08] px-4 sm:px-6 py-3">
+				<div className="fixed bottom-16 sm:bottom-0 inset-x-0 z-40 bg-dark-bg-secondary/95 backdrop-blur-xl border-t border-white/[0.08] px-4 sm:px-6 py-3">
 					<div className="max-w-7xl mx-auto flex items-center gap-4">
 						<div className="shrink-0 min-w-0 w-44 hidden sm:block">
 							<p className="text-sm font-medium text-zinc-100 truncate">{playingBeat.title}</p>

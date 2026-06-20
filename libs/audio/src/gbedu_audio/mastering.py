@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -78,6 +79,15 @@ def _get_reference_wav_b64(label: str) -> str:
 				_reference_wav_b64_cache[label] = _make_reference_wav_b64(rms, bass, hcut)
 				break
 	return _reference_wav_b64_cache[label]
+
+
+def _load_reference_from_dir(label: str) -> Path | None:
+	"""Return a reference WAV from MASTERING_REFERENCE_DIR if one exists for this label."""
+	ref_dir = os.environ.get("MASTERING_REFERENCE_DIR", "")
+	if not ref_dir:
+		return None
+	p = Path(ref_dir) / f"{label}.wav"
+	return p if p.is_file() else None
 
 
 def _write_reference_to_tmp(label: str) -> Path:
@@ -162,8 +172,11 @@ class AudioMastering:
 		"""Returns True if fallback normalization was used."""
 		tmp_ref: Path | None = None
 		if reference_path is None:
-			tmp_ref = _write_reference_to_tmp(self.DEFAULT_REFERENCE)
-			reference_path = tmp_ref
+			# Prefer a real stem placed in MASTERING_REFERENCE_DIR over synthetic noise
+			reference_path = _load_reference_from_dir(self.DEFAULT_REFERENCE)
+			if reference_path is None:
+				tmp_ref = _write_reference_to_tmp(self.DEFAULT_REFERENCE)
+				reference_path = tmp_ref
 
 		try:
 			return self._try_matchering(audio_path, reference_path, output_path)

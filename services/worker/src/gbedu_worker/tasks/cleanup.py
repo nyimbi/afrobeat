@@ -293,9 +293,132 @@ async def _do_retry_failed_distributions() -> dict[str, Any]:
 
 
 async def _attempt_distribution(track: Track) -> None:
-	"""Stub: wire up to your DSP distribution API (DistroKid, TuneCore, etc.)."""
-	# Placeholder — the real implementation calls the distribution provider API.
-	# Raises on any failure so the caller can handle retry bookkeeping.
+	"""Distribute a track to the configured DSP platform.
+
+	Provider is selected via the DISTRIBUTION_PROVIDER environment variable:
+	  - unset / "none" — log a warning and no-op (distribution disabled)
+	  - "distrokid"    — DistroKid partner API (requires DISTROKID_API_KEY +
+	                     DISTROKID_ARTIST_ID in environment)
+	  - "tunecore"     — TuneCore API (requires TUNECORE_API_KEY in environment)
+
+	Any failure raises an exception so the caller records a retry.
+	"""
 	assert track.audio_url, f"track {track.id} has no audio_url — cannot distribute"
 	assert track.status == TrackStatus.ready, f"track {track.id} is not ready"
-	log.debug("distribution attempted (stub)", track_id=track.id)
+
+	import os
+	provider_name = os.environ.get("DISTRIBUTION_PROVIDER", "none").lower().strip()
+
+	if provider_name in ("", "none"):
+		log.info(
+			"distribution.skipped — no provider configured",
+			track_id=track.id,
+			hint="Set DISTRIBUTION_PROVIDER=distrokid|tunecore to enable",
+		)
+		return
+
+	provider = _build_distribution_provider(provider_name)
+	await provider.distribute(track)
+	log.info("distribution.sent", track_id=track.id, provider=provider_name)
+
+
+def _build_distribution_provider(name: str) -> "_DistributionProvider":
+	if name == "distrokid":
+		return _DistroKidProvider()
+	if name == "tunecore":
+		return _TuneCoreProvider()
+	raise ValueError(
+		f"Unknown DISTRIBUTION_PROVIDER={name!r}. Valid values: distrokid, tunecore, none"
+	)
+
+
+class _DistributionProvider:
+	"""Abstract base for DSP distribution providers."""
+
+	async def distribute(self, track: Track) -> None:
+		raise NotImplementedError
+
+
+class _DistroKidProvider(_DistributionProvider):
+	"""DistroKid Partner API distribution.
+
+	Requires env vars:
+	  DISTROKID_API_KEY    — partner API key
+	  DISTROKID_ARTIST_ID  — artist account ID to distribute under
+
+	Docs: https://distrokid.com/partner-api (requires partner agreement)
+	"""
+
+	async def distribute(self, track: Track) -> None:
+		import os
+		import httpx
+
+		api_key = os.environ["DISTROKID_API_KEY"]
+		artist_id = os.environ["DISTROKID_ARTIST_ID"]
+
+		payload = {
+			"artist_id": artist_id,
+			"title": track.title,
+			"audio_url": track.audio_url,
+			"genre": track.sub_genre.value if track.sub_genre else "afrobeats",
+			"release_date": track.created_at.strftime("%Y-%m-%d") if track.created_at else None,
+			"isrc": track.metadata_.get("isrc") if track.metadata_ else None,
+		}
+
+		async with httpx.AsyncClient(timeout=60.0) as client:
+			resp = await client.post(
+				"https://distrokid.com/api/partner/v1/tracks",
+				json=payload,
+				headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+			)
+
+		if resp.status_code not in (200, 201, 202):
+			raise RuntimeError(
+				f"DistroKid API returned HTTP {resp.status_code}: {resp.text[:300]}"
+			)
+
+		log.info(
+			"distrokid.distribution.accepted",
+			track_id=track.id,
+			response_status=resp.status_code,
+		)
+
+
+class _TuneCoreProvider(_DistributionProvider):
+	"""TuneCore API distribution.
+
+	Requires env var:
+	  TUNECORE_API_KEY — TuneCore API key
+
+	Docs: https://www.tunecore.com/api-docs (requires TuneCore account)
+	"""
+
+	async def distribute(self, track: Track) -> None:
+		import os
+		import httpx
+
+		api_key = os.environ["TUNECORE_API_KEY"]
+
+		payload = {
+			"title": track.title,
+			"audio_url": track.audio_url,
+			"genre": track.sub_genre.value if track.sub_genre else "afrobeats",
+		}
+
+		async with httpx.AsyncClient(timeout=60.0) as client:
+			resp = await client.post(
+				"https://api.tunecore.com/v1/tracks",
+				json=payload,
+				headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+			)
+
+		if resp.status_code not in (200, 201, 202):
+			raise RuntimeError(
+				f"TuneCore API returned HTTP {resp.status_code}: {resp.text[:300]}"
+			)
+
+		log.info(
+			"tunecore.distribution.accepted",
+			track_id=track.id,
+			response_status=resp.status_code,
+		)

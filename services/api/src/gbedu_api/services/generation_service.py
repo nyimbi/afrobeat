@@ -52,6 +52,9 @@ class GenerationService:
 		assert user, "user is required"
 		assert request, "request is required"
 
+		if not user.is_verified:
+			raise AuthorizationError("Email address must be verified before generating tracks")
+
 		await self._check_and_increment_quota(user)
 
 		job = GenerationJob(

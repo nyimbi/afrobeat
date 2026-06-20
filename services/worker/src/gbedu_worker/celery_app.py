@@ -100,6 +100,8 @@ app.conf.update(
 		# can consume it exclusively without starving other work.
 		"gbedu_worker.tasks.generation.*": {"queue": "generation"},
 		"gbedu_worker.tasks.audio.*": {"queue": "generation"},
+		# Voice model training also needs GPU — same queue as generation
+		"gbedu_worker.tasks.voice.*": {"queue": "generation"},
 		# DLQ handler always stays on the DLQ queue
 		"gbedu_worker.tasks.dlq.*": {"queue": "gbedu.dlq"},
 		# Webhooks / payment — must be processed quickly
@@ -245,6 +247,7 @@ app.autodiscover_tasks(
 		"gbedu_worker.tasks.notifications",
 		"gbedu_worker.tasks.cleanup",
 		"gbedu_worker.tasks.dlq",
+		"gbedu_worker.tasks.voice",
 	],
 	force=True,
 )

@@ -55,6 +55,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 		--extra-index-url https://pypi.org/simple/ \
 		--prefix /app/venv
 
+# Install RVC from source — not on PyPI. Failure is non-fatal; voice synthesis
+# degrades gracefully when the library is absent (is_loaded=False in health check).
+COPY services/ml/install_rvc.sh ./install_rvc.sh
+RUN pip install --no-cache-dir \
+		git+https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git@main#egg=rvc \
+		fairseq \
+		faiss-cpu \
+		praat-parselmouth \
+		pyworld \
+	|| echo "WARNING: RVC installation failed — voice synthesis will be disabled"
+
 # ── Stage 2: runner ───────────────────────────────────────────────────────────
 FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime AS runner
 

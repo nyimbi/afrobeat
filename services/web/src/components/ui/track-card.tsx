@@ -24,13 +24,24 @@ interface TrackCardProps {
 	className?: string
 }
 
-// Sub-genre accent colors
+// Sub-genre accent colors — all 16 backend SubGenre values
 const GENRE_COLORS: Record<string, string> = {
-	afropop: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-	afrofusion: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-	alte: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-	amapiano: "bg-green-500/10 text-green-400 border-green-500/20",
-	uk_afrobeats: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+	afrobeats:      "bg-rose-500/10 text-rose-400 border-rose-500/20",
+	afropop:        "bg-amber-500/10 text-amber-400 border-amber-500/20",
+	afrofusion:     "bg-orange-500/10 text-orange-400 border-orange-500/20",
+	alte:           "bg-purple-500/10 text-purple-400 border-purple-500/20",
+	highlife:       "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+	amapiano_cross: "bg-green-500/10 text-green-400 border-green-500/20",
+	uk_afrobeats:   "bg-blue-500/10 text-blue-400 border-blue-500/20",
+	bongo_flava:    "bg-sky-500/10 text-sky-400 border-sky-500/20",
+	soukous:        "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+	mbalax:         "bg-violet-500/10 text-violet-400 border-violet-500/20",
+	gengetone:      "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+	benga:          "bg-teal-500/10 text-teal-400 border-teal-500/20",
+	taarab:         "bg-amber-700/10 text-amber-600 border-amber-700/20",
+	soca:           "bg-red-400/10 text-red-300 border-red-400/20",
+	calypso:        "bg-lime-500/10 text-lime-400 border-lime-500/20",
+	afro_soca:      "bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20",
 }
 
 // Deterministic gradient cover art from track ID
@@ -41,9 +52,12 @@ function getCoverGradient(id: string): string {
 		"from-green-900/80 via-teal-800/50 to-emerald-900/80",
 		"from-red-900/80 via-rose-800/50 to-pink-900/80",
 		"from-blue-900/80 via-indigo-800/50 to-cyan-900/80",
+		"from-fuchsia-900/80 via-purple-800/50 to-pink-900/80",
+		"from-teal-900/80 via-green-800/50 to-cyan-900/80",
+		"from-orange-900/80 via-red-800/50 to-rose-900/80",
 	]
-	const idx = id.charCodeAt(id.length - 1) % gradients.length
-	return gradients[idx] ?? "from-amber-900/80 via-orange-800/50 to-yellow-900/80"
+	const hash = id.split("").reduce((a, c) => a + c.charCodeAt(0), 0)
+	return gradients[hash % gradients.length] ?? "from-amber-900/80 via-orange-800/50 to-yellow-900/80"
 }
 
 export function TrackCard({

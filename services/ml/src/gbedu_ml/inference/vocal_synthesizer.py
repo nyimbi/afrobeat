@@ -10,6 +10,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from gbedu_ml.config import settings
 
+# rvc is sourced from github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
+# Install via: services/ml/install_rvc.sh
+# If absent, voice synthesis degrades gracefully (is_loaded=False in health check)
+
 log = structlog.get_logger(__name__)
 
 _LOAD_RETRY_KWARGS = dict(

@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Search, SlidersHorizontal, Music2, Loader2 } from "lucide-react"
+import Link from "next/link"
+import { Search, SlidersHorizontal, Music2, Loader2, Sparkles } from "lucide-react"
 import { Navbar } from "@/components/layout/navbar"
 import { TrackCard } from "@/components/ui/track-card"
 import { AudioPlayer } from "@/components/ui/audio-player"
@@ -11,19 +12,34 @@ import { api } from "@/lib/api"
 import type { Track, SubGenre, Language } from "@/lib/types"
 
 const SUB_GENRES: { id: SubGenre; label: string }[] = [
-	{ id: "afropop", label: "Afropop" },
-	{ id: "afrofusion", label: "Afrofusion" },
-	{ id: "alte", label: "Alte" },
-	{ id: "amapiano", label: "Amapiano" },
-	{ id: "uk_afrobeats", label: "UK Afrobeats" },
+	{ id: "afrobeats",     label: "Afrobeats" },
+	{ id: "afropop",       label: "Afropop" },
+	{ id: "afrofusion",    label: "Afrofusion" },
+	{ id: "alte",          label: "Alte" },
+	{ id: "highlife",      label: "Highlife" },
+	{ id: "amapiano_cross",label: "Amapiano" },
+	{ id: "uk_afrobeats",  label: "UK Afrobeats" },
+	{ id: "bongo_flava",   label: "Bongo Flava" },
+	{ id: "soukous",       label: "Soukous" },
+	{ id: "mbalax",        label: "Mbalax" },
+	{ id: "gengetone",     label: "Gengetone" },
+	{ id: "benga",         label: "Benga" },
+	{ id: "taarab",        label: "Taarab" },
+	{ id: "soca",          label: "Soca" },
+	{ id: "calypso",       label: "Calypso" },
+	{ id: "afro_soca",     label: "Afro-Soca" },
 ]
 
 const LANGUAGES: { id: Language; label: string }[] = [
 	{ id: "english", label: "English" },
-	{ id: "pidgin", label: "Pidgin" },
-	{ id: "yoruba", label: "Yoruba" },
-	{ id: "igbo", label: "Igbo" },
-	{ id: "mix", label: "Mix" },
+	{ id: "pidgin",  label: "Pidgin" },
+	{ id: "yoruba",  label: "Yoruba" },
+	{ id: "igbo",    label: "Igbo" },
+	{ id: "twi",     label: "Twi" },
+	{ id: "swahili", label: "Swahili" },
+	{ id: "lingala", label: "Lingala" },
+	{ id: "zulu",    label: "Zulu" },
+	{ id: "mix",     label: "Mix" },
 ]
 
 const PAGE_SIZE = 24
@@ -79,6 +95,12 @@ export default function LibraryPage() {
 	const allTracks = data?.pages.flatMap((p) => p.items) ?? []
 	const totalCount = data?.pages[0]?.total ?? 0
 
+	// Debounced search — fires 400ms after the user stops typing
+	useEffect(() => {
+		const t = setTimeout(() => setActiveSearch(search), 400)
+		return () => clearTimeout(t)
+	}, [search])
+
 	const handleSearch = useCallback((e: React.FormEvent) => {
 		e.preventDefault()
 		setActiveSearch(search)
@@ -92,7 +114,7 @@ export default function LibraryPage() {
 		<div className="min-h-dvh bg-dark-bg-primary flex flex-col">
 			<Navbar />
 
-			<main className="flex-1 pt-16">
+			<main className="flex-1 pt-16 pb-16 sm:pb-0">
 				{/* Sticky header bar */}
 				<div className="sticky top-16 z-30 bg-dark-bg-primary/90 backdrop-blur-xl border-b border-white/[0.06]">
 					<div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-3">
@@ -228,7 +250,7 @@ export default function LibraryPage() {
 
 					{/* Empty state */}
 					{!isLoading && !isError && allTracks.length === 0 && (
-						<div className="text-center py-24 space-y-4">
+						<div className="text-center py-24 space-y-5">
 							<div className="w-16 h-16 rounded-2xl bg-dark-bg-elevated border border-white/[0.06] flex items-center justify-center mx-auto">
 								<Music2 className="w-8 h-8 text-zinc-700" />
 							</div>
@@ -241,9 +263,18 @@ export default function LibraryPage() {
 								<p className="text-xs text-zinc-600">
 									{activeSearch || subGenreFilter || languageFilter
 										? "Try adjusting your search or filters"
-										: "Head to the studio to generate your first track"}
+										: "Generate your first track in the studio"}
 								</p>
 							</div>
+							{!activeSearch && !subGenreFilter && !languageFilter && (
+								<Link
+									href="/studio"
+									className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-afro-gold text-dark-bg-primary text-sm font-semibold hover:bg-afro-gold-300 transition-colors"
+								>
+									<Sparkles className="w-4 h-4" />
+									Open Studio
+								</Link>
+							)}
 						</div>
 					)}
 
@@ -288,7 +319,7 @@ export default function LibraryPage() {
 
 			{/* Mini player sticky at bottom when a track is playing */}
 			{playingTrack?.audioUrl && (
-				<div className="fixed bottom-0 inset-x-0 z-40 bg-dark-bg-secondary/95 backdrop-blur-xl border-t border-white/[0.08] px-4 sm:px-6 py-3">
+				<div className="fixed bottom-16 sm:bottom-0 inset-x-0 z-40 bg-dark-bg-secondary/95 backdrop-blur-xl border-t border-white/[0.08] px-4 sm:px-6 py-3">
 					<div className="max-w-7xl mx-auto flex items-center gap-4">
 						<div className="shrink-0 text-left min-w-0 w-40 hidden sm:block">
 							<p className="text-sm font-medium text-zinc-100 truncate">{playingTrack.title}</p>

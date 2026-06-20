@@ -17,7 +17,6 @@ dependencies = [
 	"demucs>=4.0",
 	"matchering>=2.0",
 	"pedalboard>=0.9",
-	"basic-pitch>=0.3",
 	"soundfile>=0.12",
 	"numpy>=1.26",
 	"scipy>=1.13",
@@ -25,6 +24,11 @@ dependencies = [
 	# essentia ships pre-built wheels from their own index
 	"essentia>=2.1b6.dev1110",
 ]
+
+[project.optional-dependencies]
+# basic-pitch requires TensorFlow which has no Python 3.12 wheels
+# Install manually: pip install basic-pitch on Python <=3.11
+transcription = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gbedu_audio"]

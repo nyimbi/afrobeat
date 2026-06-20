@@ -101,65 +101,64 @@ export function GenerationProgress({
 				</div>
 			</div>
 
-			{/* Step indicators */}
-			<div className="flex items-center justify-between">
-				{STEPS.map((step, idx) => {
-					const stepOrder = STATUS_ORDER[step.key]
-					const isDone = currentOrder > stepOrder
-					const isCurrent = currentOrder === stepOrder
-					const isPending = currentOrder < stepOrder
-
-					return (
-						<div key={step.key} className="flex flex-col items-center gap-1 flex-1">
-							{/* Connector line (before, except first) */}
-							{idx > 0 && (
-								<div className="absolute" />
-							)}
-
-							{/* Step circle */}
-							<div
-								className={cn(
-									"w-8 h-8 rounded-full border flex items-center justify-center text-sm transition-all duration-500",
-									isFailed && step.key !== "completed"
-										? "border-red-500/30 bg-red-500/10 text-red-400"
-										: isDone
-											? "border-afro-gold/50 bg-afro-gold/15 text-afro-gold"
-											: isCurrent
-												? "border-afro-gold bg-afro-gold/20 text-afro-gold animate-pulse"
-												: "border-zinc-800 bg-dark-bg-elevated text-zinc-700",
-								)}
-							>
-								{isDone ? "✓" : step.icon}
-							</div>
-
-							{/* Step label */}
-							<span
-								className={cn(
-									"text-[9px] font-medium uppercase tracking-wider transition-colors duration-500",
-									isFailed
-										? "text-zinc-700"
-										: isDone || isCurrent
-											? "text-afro-gold/70"
-											: "text-zinc-700",
-									isPending && "text-zinc-800",
-								)}
-							>
-								{step.label}
-							</span>
-						</div>
-					)
-				})}
-			</div>
-
-			{/* Connector line behind steps */}
-			<div className="relative -mt-10 mb-6 mx-4 flex items-center">
-				<div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-zinc-800" />
-				{!isFailed && currentOrder > 0 && (
+			{/* Step indicators with inline connector */}
+			<div className="relative">
+				{/* Track line — sits behind circles at vertical center of the w-8 circles (top-4 = 16px) */}
+				<div className="absolute top-4 left-4 right-4 h-px bg-zinc-800 pointer-events-none" />
+				{/* Progress fill */}
+				{!isFailed && currentOrder >= 0 && (
 					<div
-						className="absolute left-0 top-1/2 -translate-y-1/2 h-px bg-gradient-to-r from-afro-gold-600 to-afro-gold transition-all duration-700"
-						style={{ width: `${Math.min((currentOrder / (STEPS.length - 1)) * 100, 100)}%` }}
+						className="absolute top-4 left-4 h-px bg-gradient-to-r from-afro-gold-600 to-afro-gold transition-all duration-700 pointer-events-none"
+						style={{
+							width: `calc(${Math.min(currentOrder / (STEPS.length - 1), 1)} * (100% - 2rem))`,
+						}}
 					/>
 				)}
+
+				<div className="relative flex items-start justify-between">
+					{STEPS.map((step) => {
+						const stepOrder = STATUS_ORDER[step.key]
+						const isDone = currentOrder > stepOrder
+						const isCurrent = currentOrder === stepOrder
+						const isPending = currentOrder < stepOrder
+
+						return (
+							<div key={step.key} className="relative z-10 flex flex-col items-center gap-1 flex-1">
+								{/* Step circle */}
+								<div
+									className={cn(
+										"w-8 h-8 rounded-full border flex items-center justify-center text-sm transition-all duration-500",
+										isFailed && step.key !== "completed"
+											? "border-red-500/30 bg-red-500/10 text-red-400"
+											: isDone
+												? "border-afro-gold/50 bg-afro-gold/15 text-afro-gold"
+												: isCurrent
+													? "border-afro-gold bg-afro-gold/20 text-afro-gold animate-pulse"
+													: "border-zinc-800 bg-dark-bg-elevated text-zinc-700",
+									)}
+								>
+									{isDone ? "✓" : step.icon}
+								</div>
+
+								{/* Step label */}
+								<span
+									className={cn(
+										"text-[9px] font-medium uppercase tracking-wider transition-colors duration-500",
+										isFailed
+											? "text-zinc-700"
+											: isDone || isCurrent
+												? "text-afro-gold/70"
+												: isPending
+													? "text-zinc-800"
+													: "text-zinc-700",
+									)}
+								>
+									{step.label}
+								</span>
+							</div>
+						)
+					})}
+				</div>
 			</div>
 		</div>
 	)

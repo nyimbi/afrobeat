@@ -10,7 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gbedu_api.config import MAX_UPLOAD_SIZE_BYTES, get_settings
-from gbedu_api.deps import get_current_active_user, get_db, get_storage
+from redis.asyncio import Redis
+
+from gbedu_api.deps import get_current_active_user, get_db, get_redis, get_storage
 from gbedu_api.services.storage_service import StorageClient
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.errors import GbeduError
@@ -171,6 +173,7 @@ async def upload_avatar(
 async def get_my_stats(
 	user: Annotated[User, Depends(get_current_active_user)],
 	db: Annotated[AsyncSession, Depends(get_db)],
+	redis: Annotated[Redis, Depends(get_redis)],
 ) -> UserStatsResponse:
 	total_tracks_result = await db.execute(
 		select(func.count(Track.id)).where(
@@ -189,10 +192,8 @@ async def get_my_stats(
 	)
 	tracks_ready = ready_tracks_result.scalar_one()
 
-	from gbedu_api.deps import get_redis
-	# Generation count comes from Redis quota counter for accuracy
-	# Fall back to 0 — this is display-only and not quota-enforcing
-	today_count = 0
+	raw = await redis.get(f"gen_quota:{user.id}")
+	today_count = int(raw) if raw is not None else 0
 
 	return UserStatsResponse(
 		total_tracks=total_tracks,

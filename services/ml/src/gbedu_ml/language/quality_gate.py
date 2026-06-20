@@ -1,8 +1,12 @@
-"""Quality gate for Nigerian Pidgin and Yoruba lyric generation.
+"""Quality gate for African-language lyric generation.
 
-Both languages are severely underrepresented in foundational multilingual models:
+Underrepresentation levels in foundational multilingual models:
 - Nigerian Pidgin: absent from mBERT, mT5, XLM-R, NLLB-200
 - Yoruba: scores 2.69/5.0 on N-ATLaS
+- Swahili: moderate coverage (NLLB-200), but Bongo Flava register is absent
+- Lingala: low coverage; Congolese pop register absent
+- Zulu: moderate coverage (NLLB-200); isiZulu township register absent
+- Twi: minimal coverage; Akan pop register absent
 
 The gate uses token-level heuristics rather than model-based evaluation because
 we cannot trust the same underlying LLM to evaluate its own output quality for
@@ -80,6 +84,146 @@ _YORUBA_CHARS: frozenset[str] = frozenset("ẹọṣńàáèéìíòóùúẸỌ
 
 # Minimum Yoruba-characteristic characters per 100 total characters to pass.
 _YORUBA_CHAR_MIN_DENSITY = 0.5
+
+
+# ── Swahili marker lexicon ─────────────────────────────────────────────────────
+# Swahili is ASCII — detected via high-precision vocabulary markers that are
+# common in East African pop but absent or rare in English.
+
+_SWAHILI_MARKERS: frozenset[str] = frozenset({
+	"mimi",       # I / me
+	"wewe",       # you (singular)
+	"sisi",       # we / us
+	"lakini",     # but
+	"pamoja",     # together
+	"asante",     # thank you
+	"karibu",     # welcome / near
+	"mbona",      # why / how come
+	"bado",       # still / not yet
+	"pole",       # sorry / gently
+	"haraka",     # quickly / hurry
+	"ndiyo",      # yes
+	"hapana",     # no
+	"nataka",     # I want
+	"kweli",      # truth / truly
+	"sawa",       # okay / equal
+	"jambo",      # hello / matter
+	"nakupenda",  # I love you
+	"uchungu",    # pain / bitterness
+	"furaha",     # happiness / joy
+})
+
+_SWAHILI_MARKER_RE = re.compile(
+	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_SWAHILI_MARKERS, key=len, reverse=True)),
+	re.IGNORECASE,
+)
+
+_SWAHILI_MARKER_MIN_RATE = 2.0  # markers per 100 words
+
+# ── Lingala marker lexicon ─────────────────────────────────────────────────────
+# High-precision Lingala vocabulary found in Congolese soukous lyrics.
+# Using vocabulary rather than diacritics because Lingala diacritics overlap with French.
+
+_LINGALA_MARKERS: frozenset[str] = frozenset({
+	"bolingo",    # love
+	"mbote",      # hello / peace / greetings
+	"ndeko",      # friend / sibling
+	"biso",       # us / our
+	"mpenza",     # really / truly
+	"ntango",     # time / moment
+	"nzoto",      # body
+	"eloko",      # thing / something
+	"mwana",      # child
+	"sango",      # news / message
+	"nakobina",   # I will dance
+	"nakozela",   # I will wait
+	"nakokoma",   # I will arrive / become
+	"liwa",       # death (dramatic; common in Congolese ballads)
+	"lelo",       # today
+	"lobi",       # tomorrow
+	"boye",       # like this / thus
+	"elongi",     # face / beauty
+})
+
+_LINGALA_MARKER_RE = re.compile(
+	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_LINGALA_MARKERS, key=len, reverse=True)),
+	re.IGNORECASE,
+)
+
+_LINGALA_MARKER_MIN_RATE = 1.5  # markers per 100 words (lower: less training data)
+
+# ── Zulu marker lexicon ────────────────────────────────────────────────────────
+# isiZulu vocabulary markers from township and Amapiano register.
+
+_ZULU_MARKERS: frozenset[str] = frozenset({
+	"sawubona",     # hello (singular)
+	"sanibonani",   # hello (plural)
+	"ngiyabonga",   # thank you
+	"siyabonga",    # we thank you
+	"yebo",         # yes
+	"hayi",         # no
+	"thina",        # we / us
+	"wena",         # you
+	"umuntu",       # person
+	"ubuntu",       # humanity / communal spirit
+	"abantu",       # people
+	"amandla",      # power
+	"uthando",      # love
+	"injabulo",     # happiness / joy
+	"laduma",       # it thunders — shout of celebration
+	"bayete",       # royal greeting / praise
+	"ngikhona",     # I am here / I'm present
+	"ngiyakuthanda", # I love you
+	"mina",         # I / me (emphatic)
+	"woza",         # come / come here
+})
+
+_ZULU_MARKER_RE = re.compile(
+	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_ZULU_MARKERS, key=len, reverse=True)),
+	re.IGNORECASE,
+)
+
+_ZULU_MARKER_MIN_RATE = 1.5  # markers per 100 words
+
+# ── Twi / Akan character set ───────────────────────────────────────────────────
+# Twi (Akan) orthography uses ɔ (U+0254, open-o) and ɛ (U+025B, open-e) which
+# are highly distinctive — rare outside Akan-family languages.
+
+_TWI_CHARS: frozenset[str] = frozenset("ɔɛƆƐ")
+
+_TWI_CHAR_MIN_DENSITY = 0.3  # chars per 100 total chars (lower than Yoruba: fewer diacritics)
+
+# ── Igbo marker lexicon ────────────────────────────────────────────────────────
+# High-precision Igbo vocabulary — words absent from English, unlikely in other
+# African-language outputs, common in Igbo lyric tradition.
+
+_IGBO_MARKERS: frozenset[str] = frozenset({
+	"biko",       # please — highly distinctive
+	"daalu",      # thank you
+	"ndewo",      # hello / greeting
+	"ututu",      # morning
+	"oge",        # time
+	"obi",        # heart / compound (home)
+	"eze",        # king
+	"nna",        # father
+	"nne",        # mother
+	"onye",       # person
+	"mmiri",      # water
+	"oji",        # kola nut
+	"igwe",       # iron / chief
+	"chukwu",     # God (supreme deity)
+	"chineke",    # Creator God
+	"ifunanya",   # love
+	"ekele",      # greeting / respect
+	"ugwu",       # respect / hill
+})
+
+_IGBO_MARKER_RE = re.compile(
+	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_IGBO_MARKERS, key=len, reverse=True)),
+	re.IGNORECASE,
+)
+
+_IGBO_MARKER_MIN_RATE = 1.5  # markers per 100 words (low training data — lenient threshold)
 
 
 class QualityGateResult(BaseModel):
@@ -212,3 +356,243 @@ class PidginYorubaQualityGate:
 			reason=reason,
 			char_density=density,
 		)
+
+	# ── Swahili ───────────────────────────────────────────────────────────────
+
+	def check_swahili(self, text: str) -> QualityGateResult:
+		"""Return a gate result for Swahili (Kiswahili) lyrics.
+
+		Checks vocabulary marker density: fewer than 2 canonical Swahili
+		markers per 100 words is considered suspect. Swahili is ASCII so
+		diacritic detection is not applicable.
+		"""
+		assert text, "text must not be empty"
+
+		words = re.findall(r"\b\w+\b", text)
+		word_count = len(words)
+
+		if word_count < 10:
+			return QualityGateResult(
+				passed=False,
+				confidence=0.3,
+				reason=f"text too short to evaluate ({word_count} words)",
+				marker_rate=None,
+			)
+
+		matches = _SWAHILI_MARKER_RE.findall(text)
+		match_count = len(matches)
+		rate = (match_count / word_count) * 100
+
+		passed = rate >= _SWAHILI_MARKER_MIN_RATE
+		if passed:
+			confidence = min(1.0, 0.5 + (rate / (_SWAHILI_MARKER_MIN_RATE * 2)) * 0.5)
+		else:
+			confidence = min(0.9, 0.3 + (rate / _SWAHILI_MARKER_MIN_RATE) * 0.6)
+
+		reason = (
+			f"Swahili marker rate {rate:.1f}/100 words "
+			f"({'≥' if passed else '<'} threshold {_SWAHILI_MARKER_MIN_RATE}); "
+			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+		)
+
+		log.debug(
+			"quality_gate.swahili",
+			passed=passed,
+			marker_rate=round(rate, 2),
+			marker_count=match_count,
+			word_count=word_count,
+			confidence=round(confidence, 3),
+		)
+
+		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+
+	# ── Lingala ───────────────────────────────────────────────────────────────
+
+	def check_lingala(self, text: str) -> QualityGateResult:
+		"""Return a gate result for Lingala lyrics.
+
+		Uses vocabulary marker density. Lingala diacritics overlap with French,
+		so vocabulary is a more reliable signal than character sets.
+		"""
+		assert text, "text must not be empty"
+
+		words = re.findall(r"\b\w+\b", text)
+		word_count = len(words)
+
+		if word_count < 10:
+			return QualityGateResult(
+				passed=False,
+				confidence=0.3,
+				reason=f"text too short to evaluate ({word_count} words)",
+				marker_rate=None,
+			)
+
+		matches = _LINGALA_MARKER_RE.findall(text)
+		match_count = len(matches)
+		rate = (match_count / word_count) * 100
+
+		passed = rate >= _LINGALA_MARKER_MIN_RATE
+		if passed:
+			confidence = min(1.0, 0.5 + (rate / (_LINGALA_MARKER_MIN_RATE * 2)) * 0.5)
+		else:
+			confidence = min(0.9, 0.3 + (rate / _LINGALA_MARKER_MIN_RATE) * 0.6)
+
+		reason = (
+			f"Lingala marker rate {rate:.1f}/100 words "
+			f"({'≥' if passed else '<'} threshold {_LINGALA_MARKER_MIN_RATE}); "
+			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+		)
+
+		log.debug(
+			"quality_gate.lingala",
+			passed=passed,
+			marker_rate=round(rate, 2),
+			marker_count=match_count,
+			word_count=word_count,
+			confidence=round(confidence, 3),
+		)
+
+		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+
+	# ── Zulu ──────────────────────────────────────────────────────────────────
+
+	def check_zulu(self, text: str) -> QualityGateResult:
+		"""Return a gate result for Zulu (isiZulu) lyrics.
+
+		Uses vocabulary marker density from the township and Amapiano register.
+		isiZulu click consonants (c, q, x) are not reliably reproduced by LLMs
+		so vocabulary presence is the primary signal.
+		"""
+		assert text, "text must not be empty"
+
+		words = re.findall(r"\b\w+\b", text)
+		word_count = len(words)
+
+		if word_count < 10:
+			return QualityGateResult(
+				passed=False,
+				confidence=0.3,
+				reason=f"text too short to evaluate ({word_count} words)",
+				marker_rate=None,
+			)
+
+		matches = _ZULU_MARKER_RE.findall(text)
+		match_count = len(matches)
+		rate = (match_count / word_count) * 100
+
+		passed = rate >= _ZULU_MARKER_MIN_RATE
+		if passed:
+			confidence = min(1.0, 0.5 + (rate / (_ZULU_MARKER_MIN_RATE * 2)) * 0.5)
+		else:
+			confidence = min(0.9, 0.3 + (rate / _ZULU_MARKER_MIN_RATE) * 0.6)
+
+		reason = (
+			f"Zulu marker rate {rate:.1f}/100 words "
+			f"({'≥' if passed else '<'} threshold {_ZULU_MARKER_MIN_RATE}); "
+			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+		)
+
+		log.debug(
+			"quality_gate.zulu",
+			passed=passed,
+			marker_rate=round(rate, 2),
+			marker_count=match_count,
+			word_count=word_count,
+			confidence=round(confidence, 3),
+		)
+
+		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+
+	# ── Igbo ──────────────────────────────────────────────────────────────────
+
+	def check_igbo(self, text: str) -> QualityGateResult:
+		"""Return a gate result for Igbo lyrics.
+
+		Uses vocabulary marker density. Igbo dot-below diacritics (ụ, ọ, ị)
+		overlap with Yoruba so vocabulary is a more reliable primary signal.
+		Threshold is lenient (1.5/100 words) reflecting minimal LLM training data.
+		"""
+		assert text, "text must not be empty"
+
+		words = re.findall(r"\b\w+\b", text)
+		word_count = len(words)
+
+		if word_count < 10:
+			return QualityGateResult(
+				passed=False,
+				confidence=0.3,
+				reason=f"text too short to evaluate ({word_count} words)",
+				marker_rate=None,
+			)
+
+		matches = _IGBO_MARKER_RE.findall(text)
+		match_count = len(matches)
+		rate = (match_count / word_count) * 100
+
+		passed = rate >= _IGBO_MARKER_MIN_RATE
+		if passed:
+			confidence = min(1.0, 0.5 + (rate / (_IGBO_MARKER_MIN_RATE * 2)) * 0.5)
+		else:
+			confidence = min(0.9, 0.3 + (rate / _IGBO_MARKER_MIN_RATE) * 0.6)
+
+		reason = (
+			f"Igbo marker rate {rate:.1f}/100 words "
+			f"({'≥' if passed else '<'} threshold {_IGBO_MARKER_MIN_RATE}); "
+			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+		)
+
+		log.debug(
+			"quality_gate.igbo",
+			passed=passed,
+			marker_rate=round(rate, 2),
+			marker_count=match_count,
+			word_count=word_count,
+			confidence=round(confidence, 3),
+		)
+
+		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+
+	# ── Twi / Akan ────────────────────────────────────────────────────────────
+
+	def check_twi(self, text: str) -> QualityGateResult:
+		"""Return a gate result for Twi (Akan) lyrics.
+
+		Checks density of ɔ (U+0254) and ɛ (U+025B) — the two open vowels
+		that are orthographically mandatory in standard Twi and highly distinctive.
+		"""
+		assert text, "text must not be empty"
+
+		char_count = len(text)
+		if char_count < 20:
+			return QualityGateResult(
+				passed=False,
+				confidence=0.3,
+				reason=f"text too short to evaluate ({char_count} chars)",
+				char_density=None,
+			)
+
+		twi_count = sum(1 for c in text if c in _TWI_CHARS)
+		density = (twi_count / char_count) * 100
+
+		passed = density >= _TWI_CHAR_MIN_DENSITY
+		if passed:
+			confidence = min(1.0, 0.4 + (density / (_TWI_CHAR_MIN_DENSITY * 4)) * 0.6)
+		else:
+			confidence = min(0.9, 0.25 + (density / _TWI_CHAR_MIN_DENSITY) * 0.65)
+
+		reason = (
+			f"Twi open-vowel density {density:.2f}/100 chars "
+			f"({'≥' if passed else '<'} threshold {_TWI_CHAR_MIN_DENSITY}); "
+			f"characteristic chars found: {twi_count}"
+		)
+
+		log.debug(
+			"quality_gate.twi",
+			passed=passed,
+			char_density=round(density, 3),
+			twi_count=twi_count,
+			total_chars=char_count,
+			confidence=round(confidence, 3),
+		)
+
+		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, char_density=density)

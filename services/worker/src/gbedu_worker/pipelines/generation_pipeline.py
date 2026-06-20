@@ -16,10 +16,13 @@ JSON objects compatible with the SSE stream in the API service.
 """
 
 import asyncio
+import base64
 import json
+import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -207,31 +210,62 @@ class GenerationPipelineOrchestrator:
 		job: GenerationJob,
 		ml_result: dict[str, Any],
 	) -> dict[str, Any]:
-		"""Run DSP pipeline over raw ML output — normalise, watermark, preview."""
-		if job.status == JobStatus.audio_processing and job.metadata_.get("processed_result"):
-			self._log.info("audio_process: resuming from stored result")
-			return job.metadata_["processed_result"]  # type: ignore[return-value]
+		"""Decode ML audio, run DSP pipeline, return artifacts ready for upload.
 
+		Returns {"artifacts": dict[str, bytes], "analysis": dict[str, Any]}.
+		Raw bytes are not cached in JSONB (too large); audio_analysis is cached
+		so _stage_create_track can use accurate BPM/key from the DSP layer.
+		On retry the pipeline re-runs — it is deterministic from the same input.
+		"""
 		await self._update_status(job, JobStatus.audio_processing, progress=45)
 		await self._publish_progress(50, "Processing audio…")
 
-		# Import here — heavy deps (torch, librosa) only loaded inside worker
+		# Decode raw audio from ML service response
+		if "audio_bytes_b64" in ml_result:
+			raw_bytes = base64.b64decode(ml_result["audio_bytes_b64"])
+		elif "audio_url" in ml_result:
+			async with httpx.AsyncClient(timeout=120) as client:
+				resp = await client.get(ml_result["audio_url"])
+				resp.raise_for_status()
+			raw_bytes = resp.content
+		else:
+			raise MLServiceError(
+				f"ml_result missing audio field; keys present: {list(ml_result.keys())}"
+			)
+
+		# Heavy deps loaded inside worker to avoid slow imports at startup
 		from gbedu_audio.pipeline import AudioPipeline  # type: ignore[import]
 
-		pipeline = AudioPipeline(settings=_storage_settings)
-		processed = await asyncio.get_event_loop().run_in_executor(
-			None,
-			pipeline.process,
-			ml_result,
-		)
+		with tempfile.TemporaryDirectory(prefix="gbedu_audio_") as tmpdir:
+			tmp_path = Path(tmpdir)
+			raw_audio_path = tmp_path / "raw_audio.wav"
+			raw_audio_path.write_bytes(raw_bytes)
 
-		# Cache so retry can skip
-		job.metadata_ = {**job.metadata_, "processed_result": processed}
-		self._session.add(job)
-		await self._session.flush()
+			output_dir = tmp_path / "output"
+			pipeline = AudioPipeline()
+			result = await pipeline.process(raw_audio_path, output_dir)
+
+			# Read output files into bytes while temp dir is still alive
+			artifacts: dict[str, bytes] = {}
+			if result.final_mp3.is_file():
+				artifacts["audio"] = result.final_mp3.read_bytes()
+			if result.watermarked_mp3 and result.watermarked_mp3.is_file():
+				artifacts["audio_watermarked"] = result.watermarked_mp3.read_bytes()
+			if result.preview_mp3.is_file():
+				artifacts["preview"] = result.preview_mp3.read_bytes()
+			for stem_name, stem_path in result.stems.items():
+				if stem_path.is_file():
+					artifacts[f"stem_{stem_name}"] = stem_path.read_bytes()
+
+			assert artifacts, "AudioPipeline produced no uploadable artifacts"
+
+			# Cache lightweight analysis for _stage_create_track BPM/key resolution
+			job.metadata_ = {**job.metadata_, "audio_analysis": result.analysis}
+			self._session.add(job)
+			await self._session.flush()
 
 		await self._publish_progress(70, "Audio processing complete")
-		return processed  # type: ignore[return-value]
+		return {"artifacts": artifacts, "analysis": result.analysis}
 
 	async def _stage_upload(
 		self,
@@ -288,6 +322,8 @@ class GenerationPipelineOrchestrator:
 				return existing
 
 		meta = job.metadata_
+		# Prefer DSP-measured BPM/key (from AudioPipeline analysis) over ML estimate
+		audio_analysis = meta.get("audio_analysis", {})
 		track = Track(
 			id=uuid7str(),
 			user_id=job.user_id,
@@ -296,10 +332,10 @@ class GenerationPipelineOrchestrator:
 			prompt=job.prompt_used,
 			sub_genre=meta.get("sub_genre", "afropop"),
 			language=meta.get("language", "english"),
-			bpm=ml_result.get("bpm"),
-			key=ml_result.get("key"),
+			bpm=audio_analysis.get("bpm") or ml_result.get("bpm"),
+			key=audio_analysis.get("key") or ml_result.get("key"),
 			energy_level=meta.get("energy_level", 5),
-			duration_seconds=ml_result.get("duration_seconds"),
+			duration_seconds=audio_analysis.get("duration_seconds") or ml_result.get("duration_seconds"),
 			status=TrackStatus.processing,
 			audio_url=urls.get("audio"),
 			audio_url_watermarked=urls.get("audio_watermarked"),

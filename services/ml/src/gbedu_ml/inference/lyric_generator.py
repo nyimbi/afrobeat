@@ -12,7 +12,7 @@ from gbedu_core.models.track import Language
 from gbedu_core.schemas import GenerationRequest
 from gbedu_ml.config import settings
 from gbedu_ml.language.quality_gate import PidginYorubaQualityGate
-from gbedu_ml.prompts.afrobeats import AfrobeatsPromptEngine
+from gbedu_ml.prompts.afrobeats import AfrobeatsPromptEngine, CorpusTarget, get_target
 
 log = structlog.get_logger(__name__)
 
@@ -41,6 +41,7 @@ class LyricResult(BaseModel):
 	full_lyrics: str = Field(default="")
 	language_used: Language
 	fell_back_to_english: bool = Field(default=False)
+	structure_retries: int = Field(default=0)
 	# User-visible disclosure shown in the UI when generation fell back to English
 	language_disclosure: str | None = Field(default=None)
 
@@ -104,6 +105,22 @@ class LyricGenerator:
 		self._is_loaded = True
 		log.info("lyric_gen.load.done", model=settings.LLAMA_MODEL_ID)
 
+	def _validate_structure(self, raw: str, target: CorpusTarget) -> tuple[bool, str]:
+		"""Check generated lyrics meet corpus structural targets for line count and density."""
+		lines = [
+			l for l in raw.splitlines()
+			if l.strip() and not _SECTION_PATTERN.match(l.strip())
+		]
+		line_count = len(lines)
+		if not (target.min_lines <= line_count <= target.max_lines):
+			return False, f"line_count={line_count} not in [{target.min_lines},{target.max_lines}]"
+		if lines:
+			avg_wpl = sum(len(l.split()) for l in lines) / len(lines)
+			wpl_min, wpl_max = target.words_per_line
+			if not (wpl_min - 1 <= avg_wpl <= wpl_max + 1):
+				return False, f"avg_wpl={avg_wpl:.1f} not in [{wpl_min - 1},{wpl_max + 1}]"
+		return True, "ok"
+
 	async def generate(
 		self,
 		request: GenerationRequest,
@@ -116,48 +133,91 @@ class LyricGenerator:
 		structure = song_structure or {
 			"sections": ["verse1", "prehook", "hook", "verse2", "bridge", "outro"]
 		}
+		target = get_target(request.sub_genre)
 
 		loop = asyncio.get_event_loop()
-		raw_lyrics = await loop.run_in_executor(
-			None, self._generate_sync, request, structure
-		)
 
+		# Generate with structural validation — retry up to 2 times on failure.
+		# Temperature > 0 means each call produces different output.
+		struct_retries = 0
+		raw_lyrics = await loop.run_in_executor(None, self._generate_sync, request, structure)
+		struct_ok, struct_reason = self._validate_structure(raw_lyrics, target)
+		while not struct_ok and struct_retries < 2:
+			log.warning(
+				"lyric.structure_retry",
+				attempt=struct_retries + 1,
+				reason=struct_reason,
+				sub_genre=request.sub_genre.value,
+			)
+			struct_retries += 1
+			raw_lyrics = await loop.run_in_executor(None, self._generate_sync, request, structure)
+			struct_ok, struct_reason = self._validate_structure(raw_lyrics, target)
+		if not struct_ok:
+			log.warning(
+				"lyric.structure_constraint_unmet",
+				retries=struct_retries,
+				reason=struct_reason,
+				sub_genre=request.sub_genre.value,
+			)
+
+		# Language quality gates — fall back to English if gate fails.
 		fell_back = False
 		disclosure: str | None = None
 
-		if request.language == Language.pidgin:
-			gate_result = self._quality_gate.check_pidgin(raw_lyrics)
-			if not gate_result.passed:
-				log.warning(
-					"lyric.language_fallback",
-					requested=request.language.value,
-					reason=gate_result.reason,
-					confidence=gate_result.confidence,
-					marker_rate=gate_result.marker_rate,
-				)
-				fallback_request = request.model_copy(update={"language": Language.english})
-				raw_lyrics = await loop.run_in_executor(
-					None, self._generate_sync, fallback_request, structure
-				)
-				fell_back = True
-				disclosure = "Generated in English — Pidgin/Yoruba generation is experimental"
+		_gate_checks: dict[Language, tuple] = {
+			Language.pidgin: (
+				self._quality_gate.check_pidgin,
+				{"marker_rate": None},
+				"marker_rate",
+			),
+			Language.yoruba: (
+				self._quality_gate.check_yoruba,
+				{"char_density": None},
+				"char_density",
+			),
+			Language.swahili: (
+				self._quality_gate.check_swahili,
+				{"marker_rate": None},
+				"marker_rate",
+			),
+			Language.lingala: (
+				self._quality_gate.check_lingala,
+				{"marker_rate": None},
+				"marker_rate",
+			),
+			Language.zulu: (
+				self._quality_gate.check_zulu,
+				{"marker_rate": None},
+				"marker_rate",
+			),
+			Language.twi: (
+				self._quality_gate.check_twi,
+				{"char_density": None},
+				"char_density",
+			),
+		}
 
-		elif request.language == Language.yoruba:
-			gate_result = self._quality_gate.check_yoruba(raw_lyrics)
+		if request.language in _gate_checks:
+			check_fn, extra_log_keys, metric_key = _gate_checks[request.language]
+			gate_result = check_fn(raw_lyrics)
 			if not gate_result.passed:
+				metric_val = getattr(gate_result, metric_key)
 				log.warning(
 					"lyric.language_fallback",
 					requested=request.language.value,
 					reason=gate_result.reason,
 					confidence=gate_result.confidence,
-					char_density=gate_result.char_density,
+					**{metric_key: metric_val},
 				)
 				fallback_request = request.model_copy(update={"language": Language.english})
 				raw_lyrics = await loop.run_in_executor(
 					None, self._generate_sync, fallback_request, structure
 				)
 				fell_back = True
-				disclosure = "Generated in English — Pidgin/Yoruba generation is experimental"
+				disclosure = (
+					f"Generated in English — {request.language.value.title()} "
+					f"generation is experimental and quality gate failed"
+				)
 
 		sections = self._parse_sections(raw_lyrics)
 		return LyricResult(
@@ -170,6 +230,7 @@ class LyricGenerator:
 			full_lyrics=raw_lyrics.strip(),
 			language_used=Language.english if fell_back else request.language,
 			fell_back_to_english=fell_back,
+			structure_retries=struct_retries,
 			language_disclosure=disclosure,
 		)
 

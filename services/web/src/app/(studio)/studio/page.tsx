@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import * as Slider from "@radix-ui/react-slider"
 import * as Tooltip from "@radix-ui/react-tooltip"
 import {
@@ -29,20 +30,58 @@ import type { SubGenre, Language } from "@/lib/types"
 
 // ---- Static options ----
 
-const SUB_GENRES: { id: SubGenre; label: string; emoji: string }[] = [
-	{ id: "afropop", label: "Afropop", emoji: "🌟" },
-	{ id: "afrofusion", label: "Afrofusion", emoji: "🔥" },
-	{ id: "alte", label: "Alte", emoji: "🎸" },
-	{ id: "amapiano", label: "Amapiano", emoji: "🪗" },
-	{ id: "uk_afrobeats", label: "UK Afrobeats", emoji: "👑" },
+const SUB_GENRE_GROUPS: { region: string; genres: { id: SubGenre; label: string; emoji: string }[] }[] = [
+	{
+		region: "West Africa",
+		genres: [
+			{ id: "afrobeats",  label: "Afrobeats",  emoji: "🥁" },
+			{ id: "afropop",    label: "Afropop",    emoji: "🌟" },
+			{ id: "afrofusion", label: "Afrofusion", emoji: "🔥" },
+			{ id: "alte",       label: "Alte",       emoji: "🎸" },
+			{ id: "highlife",   label: "Highlife",   emoji: "🎺" },
+		],
+	},
+	{
+		region: "Diaspora",
+		genres: [
+			{ id: "amapiano_cross", label: "Amapiano",    emoji: "🪗" },
+			{ id: "uk_afrobeats",   label: "UK Afrobeats", emoji: "👑" },
+		],
+	},
+	{
+		region: "East & Central Africa",
+		genres: [
+			{ id: "bongo_flava", label: "Bongo Flava", emoji: "🌊" },
+			{ id: "soukous",     label: "Soukous",     emoji: "⚡" },
+			{ id: "mbalax",      label: "Mbalax",      emoji: "🪘" },
+			{ id: "gengetone",   label: "Gengetone",   emoji: "🎤" },
+			{ id: "benga",       label: "Benga",       emoji: "🎵" },
+			{ id: "taarab",      label: "Taarab",      emoji: "🪕" },
+		],
+	},
+	{
+		region: "Caribbean",
+		genres: [
+			{ id: "soca",      label: "Soca",      emoji: "🎉" },
+			{ id: "calypso",   label: "Calypso",   emoji: "🌴" },
+			{ id: "afro_soca", label: "Afro-Soca", emoji: "🌍" },
+		],
+	},
 ]
+
+// Flat list derived from groups — used for display labels and lookups
+const SUB_GENRES = SUB_GENRE_GROUPS.flatMap((g) => g.genres)
 
 const LANGUAGES: { id: Language; label: string; flag: string }[] = [
 	{ id: "english", label: "English", flag: "🇬🇧" },
-	{ id: "pidgin", label: "Pidgin", flag: "🇳🇬" },
-	{ id: "yoruba", label: "Yoruba", flag: "🟡" },
-	{ id: "igbo", label: "Igbo", flag: "🟢" },
-	{ id: "mix", label: "Mix", flag: "🌍" },
+	{ id: "pidgin",  label: "Pidgin",  flag: "🇳🇬" },
+	{ id: "yoruba",  label: "Yoruba",  flag: "🟡" },
+	{ id: "igbo",    label: "Igbo",    flag: "🟢" },
+	{ id: "twi",     label: "Twi",     flag: "🇬🇭" },
+	{ id: "swahili", label: "Swahili", flag: "🇹🇿" },
+	{ id: "lingala", label: "Lingala", flag: "🇨🇩" },
+	{ id: "zulu",    label: "Zulu",    flag: "🇿🇦" },
+	{ id: "mix",     label: "Mix",     flag: "🌍" },
 ]
 
 const DURATIONS: { value: 30 | 60 | 120 | 210; label: string }[] = [
@@ -55,11 +94,22 @@ const DURATIONS: { value: 30 | 60 | 120 | 210; label: string }[] = [
 const ENERGY_EMOJIS = ["😴", "😌", "🙂", "😊", "😎", "🙌", "💃", "🔥", "⚡", "🚀"]
 
 const GENRE_BADGE_COLORS: Record<SubGenre, string> = {
-	afropop: "bg-amber-500/15 text-amber-400 border-amber-500/25",
-	afrofusion: "bg-orange-500/15 text-orange-400 border-orange-500/25",
-	alte: "bg-purple-500/15 text-purple-400 border-purple-500/25",
-	amapiano: "bg-green-500/15 text-green-400 border-green-500/25",
-	uk_afrobeats: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+	afrobeats:     "bg-rose-500/15 text-rose-400 border-rose-500/25",
+	afropop:       "bg-amber-500/15 text-amber-400 border-amber-500/25",
+	afrofusion:    "bg-orange-500/15 text-orange-400 border-orange-500/25",
+	alte:          "bg-purple-500/15 text-purple-400 border-purple-500/25",
+	highlife:      "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+	amapiano_cross:"bg-green-500/15 text-green-400 border-green-500/25",
+	uk_afrobeats:  "bg-blue-500/15 text-blue-400 border-blue-500/25",
+	bongo_flava:   "bg-sky-500/15 text-sky-400 border-sky-500/25",
+	soukous:       "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
+	mbalax:        "bg-violet-500/15 text-violet-400 border-violet-500/25",
+	gengetone:     "bg-cyan-500/15 text-cyan-400 border-cyan-500/25",
+	benga:         "bg-teal-500/15 text-teal-400 border-teal-500/25",
+	taarab:        "bg-amber-700/15 text-amber-600 border-amber-700/25",
+	soca:          "bg-red-400/15 text-red-300 border-red-400/25",
+	calypso:       "bg-lime-500/15 text-lime-400 border-lime-500/25",
+	afro_soca:     "bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/25",
 }
 
 // ---- Sub-components ----
@@ -102,9 +152,13 @@ export default function StudioPage() {
 	const [showUpgrade, setShowUpgrade] = useState(false)
 	const [copied, setCopied] = useState(false)
 	const [isDownloading, setIsDownloading] = useState(false)
+	const [isSaving, setIsSaving] = useState(false)
+	const [stems, setStems] = useState<Record<string, string> | null>(null)
+	const [stemsLoading, setStemsLoading] = useState(false)
 
+	const router = useRouter()
 	const canDownload = user?.subscriptionTier !== "free"
-	const canGetStems = user?.subscriptionTier === "pro" || user?.subscriptionTier === "label"
+	const canGetStems = user?.subscriptionTier !== "free"   // creator, pro, label all have stems
 
 	const handleGenerate = useCallback(async () => {
 		if (!prompt.trim()) return
@@ -147,11 +201,44 @@ export default function StudioPage() {
 		setTimeout(() => setCopied(false), 2_500)
 	}, [currentTrack])
 
-	const handleGetStems = useCallback(() => {
+	const handleSaveToLibrary = useCallback(async () => {
+		if (!currentTrack || isSaving) return
+		setIsSaving(true)
+		// Track is already persisted in the DB — navigate to library after brief feedback
+		setTimeout(() => router.push("/library"), 900)
+	}, [currentTrack, isSaving, router])
+
+	const handleGetStems = useCallback(async () => {
 		if (!canGetStems) {
 			setShowUpgrade(true)
+			return
 		}
-	}, [canGetStems])
+		if (!currentTrack) return
+		if (stems !== null) {
+			setStems(null)   // toggle off
+			return
+		}
+		setStemsLoading(true)
+		try {
+			const { stems: s } = await api.tracks.getStems(currentTrack.id)
+			setStems(s)
+		} catch {
+			// silently fail — user sees no stems panel
+		} finally {
+			setStemsLoading(false)
+		}
+	}, [canGetStems, currentTrack, stems])
+
+	// ⌘+Enter / Ctrl+Enter to generate
+	useEffect(() => {
+		function onKey(e: KeyboardEvent) {
+			if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !isGenerating && prompt.trim()) {
+				handleGenerate()
+			}
+		}
+		window.addEventListener("keydown", onKey)
+		return () => window.removeEventListener("keydown", onKey)
+	}, [isGenerating, prompt, handleGenerate])
 
 	const showProgress = isGenerating && !currentTrack
 	const showPlayer = currentTrack?.audioUrl || currentTrack?.previewUrl
@@ -162,7 +249,7 @@ export default function StudioPage() {
 				<Navbar />
 
 				{/* Main grid */}
-				<main className="flex-1 flex flex-col lg:flex-row pt-16 overflow-hidden">
+				<main className="flex-1 flex flex-col lg:flex-row pt-16 pb-16 sm:pb-0 overflow-hidden">
 					{/* ===== LEFT PANEL — Generation controls ===== */}
 					<aside className="w-full lg:w-[42%] xl:w-[38%] flex flex-col border-b lg:border-b-0 lg:border-r border-white/[0.06] overflow-y-auto">
 						<div className="flex-1 p-5 sm:p-6 space-y-6">
@@ -186,28 +273,35 @@ export default function StudioPage() {
 								/>
 							</div>
 
-							{/* Sub-genre */}
-							<div className="space-y-2">
+							{/* Sub-genre — grouped by region */}
+							<div className="space-y-3">
 								<SectionLabel>Sub-genre</SectionLabel>
-								<div className="flex flex-wrap gap-2">
-									{SUB_GENRES.map((g) => (
-										<button
-											key={g.id}
-											onClick={() => setSubGenre(g.id)}
-											disabled={isGenerating}
-											className={cn(
-												"flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all",
-												subGenre === g.id
-													? cn(GENRE_BADGE_COLORS[g.id], "shadow-sm")
-													: "border-white/[0.07] text-zinc-500 hover:border-white/[0.14] hover:text-zinc-300",
-												"disabled:opacity-50 disabled:cursor-not-allowed",
-											)}
-										>
-											<span>{g.emoji}</span>
-											{g.label}
-										</button>
-									))}
-								</div>
+								{SUB_GENRE_GROUPS.map((group) => (
+									<div key={group.region} className="space-y-1.5">
+										<span className="text-[9px] font-mono uppercase tracking-widest text-zinc-700">
+											{group.region}
+										</span>
+										<div className="flex flex-wrap gap-1.5">
+											{group.genres.map((g) => (
+												<button
+													key={g.id}
+													onClick={() => setSubGenre(g.id)}
+													disabled={isGenerating}
+													className={cn(
+														"flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all",
+														subGenre === g.id
+															? cn(GENRE_BADGE_COLORS[g.id], "shadow-sm")
+															: "border-white/[0.07] text-zinc-500 hover:border-white/[0.14] hover:text-zinc-300",
+														"disabled:opacity-50 disabled:cursor-not-allowed",
+													)}
+												>
+													<span>{g.emoji}</span>
+													{g.label}
+												</button>
+											))}
+										</div>
+									</div>
+								))}
 							</div>
 
 							{/* Language */}
@@ -339,6 +433,9 @@ export default function StudioPage() {
 								>
 									<Sparkles className="w-5 h-5" />
 									Generate Track
+									<kbd className="hidden sm:inline-flex items-center gap-0.5 ml-1 font-mono text-[10px] opacity-60 bg-dark-bg-primary/30 px-1.5 py-0.5 rounded">
+										⌘↵
+									</kbd>
 								</button>
 							)}
 
@@ -486,7 +583,7 @@ export default function StudioPage() {
 											>
 												<Download className="w-4 h-4" />
 												{canDownload ? "Download MP3" : "Download"}
-												{!canDownload && <span className="text-[10px] text-afro-gold">PRO</span>}
+												{!canDownload && <span className="text-[10px] text-afro-gold">CREATOR+</span>}
 											</button>
 										</Tooltip.Trigger>
 										{!canDownload && (
@@ -514,27 +611,33 @@ export default function StudioPage() {
 									</button>
 
 									<button
-										onClick={() => {}}
-										className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-dark-bg-elevated border border-white/[0.08] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.16] transition-all"
+										onClick={handleSaveToLibrary}
+										disabled={isSaving}
+										className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-dark-bg-elevated border border-white/[0.08] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.16] transition-all disabled:opacity-60"
 									>
-										<BookmarkPlus className="w-4 h-4" />
-										Save to Library
+										{isSaving ? (
+											<><Check className="w-4 h-4 text-afro-green" /> Saved!</>
+										) : (
+											<><BookmarkPlus className="w-4 h-4" /> Save to Library</>
+										)}
 									</button>
 
 									<Tooltip.Root>
 										<Tooltip.Trigger asChild>
 											<button
 												onClick={handleGetStems}
+												disabled={stemsLoading}
 												className={cn(
 													"flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
 													canGetStems
 														? "bg-dark-bg-elevated border border-white/[0.08] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.16]"
 														: "bg-dark-bg-elevated border border-white/[0.08] text-zinc-600",
+													"disabled:opacity-60",
 												)}
 											>
 												<Music2 className="w-4 h-4" />
-												Get Stems
-												{!canGetStems && <span className="text-[10px] text-purple-400">PRO</span>}
+												{stemsLoading ? "Loading…" : stems ? "Hide Stems" : "Get Stems"}
+												{!canGetStems && <span className="text-[10px] text-purple-400">CREATOR+</span>}
 											</button>
 										</Tooltip.Trigger>
 										{!canGetStems && (
@@ -543,7 +646,7 @@ export default function StudioPage() {
 													className="rounded-lg bg-dark-bg-card border border-white/[0.08] px-3 py-1.5 text-xs text-zinc-300 shadow-xl"
 													sideOffset={6}
 												>
-													Stems available on Pro and Label plans
+													Stems available on Creator and above plans
 													<Tooltip.Arrow className="fill-dark-bg-card" />
 												</Tooltip.Content>
 											</Tooltip.Portal>
@@ -560,6 +663,28 @@ export default function StudioPage() {
 										Regenerate
 									</button>
 								</div>
+
+								{/* Stems download panel */}
+								{stems && Object.keys(stems).length > 0 && (
+									<div className="glass rounded-xl p-4 border border-white/[0.06]">
+										<p className="text-[10px] font-mono uppercase tracking-widest text-zinc-600 mb-3">
+											Stems
+										</p>
+										<div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+											{Object.entries(stems).map(([name, url]) => (
+												<a
+													key={name}
+													href={url}
+													download={`${currentTrack.title}_${name}.mp3`}
+													className="flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-bg-elevated border border-white/[0.08] text-xs text-zinc-400 hover:text-zinc-200 hover:border-white/[0.16] transition-all"
+												>
+													<Download className="w-3.5 h-3.5 shrink-0" />
+													<span className="capitalize truncate">{name.replace(/^stem_/, "")}</span>
+												</a>
+											))}
+										</div>
+									</div>
+								)}
 
 								{/* Share preview card */}
 								<div className="glass rounded-xl p-4 border border-white/[0.06]">
