@@ -47,6 +47,12 @@ class MLSettings(BaseSettings):
 		default="meta-llama/Meta-Llama-3-8B-Instruct",
 		description="HuggingFace repo ID for Llama-3 8B Instruct (lyric generation)",
 	)
+	LLAMA_MAX_NEW_TOKENS: int = Field(
+		default=1024,
+		ge=64,
+		le=2048,
+		description="Hard cap on tokens generated per Llama-3 call — prevents runaway generation consuming VRAM",
+	)
 
 	# ── RVC voice conversion ───────────────────────────────────────────────────
 	RVC_MODELS_DIR: Path = Field(

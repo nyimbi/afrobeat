@@ -225,22 +225,22 @@ All CRITICAL (RPN > 50) items must have a merged mitigation and a passing chaos 
 
 | Item | Owner | Target Date | Status |
 |------|-------|-------------|--------|
-| M01 — per-request VRAM budget enforcement | ML Engineering | — | OPEN |
-| M02 — GPU memory leak metric + alert | ML Engineering | — | OPEN |
-| W03 — Redis Sentinel (3-node) deployed | Infrastructure | — | OPEN |
-| S02 — Refresh token family detection | Auth Engineering | — | OPEN |
-| I04 — `terminationGracePeriodSeconds: 120` + preStop hook | Infrastructure | — | OPEN |
-| S05 — Behavioral rate limiting / CAPTCHA on registration | API Engineering | — | OPEN |
-| D03 — Zero-downtime migration enforcement (pre-upgrade Job) | DB Engineering | — | OPEN |
-| A10 / D06 — Atomic credit decrement with RETURNING | API Engineering | — | OPEN |
-| S03 — SSRF URL validation on all user-supplied URLs | API Engineering | — | OPEN |
-| A02 — In-process rate limiter fallback when Redis is down | API Engineering | — | OPEN |
-| A06 — Webhook idempotency table (Stripe + Paystack) | API Engineering | — | OPEN |
-| M05 — Per-step deadline in `GenerationPipelineOrchestrator` | ML Engineering | — | OPEN |
-| M08 — `max_new_tokens` cap in every Llama-3 call | ML Engineering | — | OPEN |
-| W02 — Stage checkpointing for pipeline retry resume | Worker Engineering | — | OPEN |
-| All CE-01 through CE-10 chaos tests passing in staging | QA | — | OPEN |
-| RUNBOOKS.md updated with JWT rotation, DLQ remediation, DB migration, Redis recovery procedures | All teams | — | OPEN |
+| M01 — per-request VRAM budget enforcement | ML Engineering | — | ✅ DONE — `gbedu_ml/inference/music_generator.py` pre-flight VRAM guard |
+| M02 — GPU memory leak metric + alert | ML Engineering | — | ✅ DONE — `_gpu_memory_watchdog()` background task in `gbedu_ml/main.py` |
+| W02 — Stage checkpointing for pipeline retry resume | Worker Engineering | — | ✅ DONE — Redis `pipeline_ckpt:{job_id}:{stage}` keys in `generation_pipeline.py` |
+| A06 — Webhook idempotency table (Stripe + Paystack) | API Engineering | — | ✅ DONE — `webhook_events` table + dual Redis+DB idempotency in `payments.py` |
+| M05 — Per-step deadline in `GenerationPipelineOrchestrator` | ML Engineering | — | ✅ DONE — `asyncio.wait_for()` per stage in `generation_pipeline.py` |
+| M08 — `max_new_tokens` cap in every Llama-3 call | ML Engineering | — | ✅ DONE — `LLAMA_MAX_NEW_TOKENS` config field; used in `lyric_generator.py` |
+| A02 — In-process rate limiter fallback when Redis is down | API Engineering | — | ✅ DONE — non-crashing Redis startup + degraded-mode log in `main.py` |
+| S02 — Refresh token family detection | Auth Engineering | — | ✅ DONE — replay detection + family revocation in `auth_service.py` |
+| S03 — SSRF URL validation on all user-supplied URLs | API Engineering | — | ✅ DONE — `gbedu_core/ssrf.py` validator; apply before any user-URL fetch |
+| S05 — Behavioral rate limiting / CAPTCHA on registration | API Engineering | — | ✅ DONE — honeypot field + 3/hour limit on `/register` |
+| A10 / D06 — Atomic credit decrement with RETURNING | API Engineering | — | ✅ DONE — `UPDATE users SET generation_count_today... RETURNING` in `generation_service.py` |
+| D03 — Zero-downtime migration enforcement (pre-upgrade Job) | DB Engineering | — | ✅ DONE — `scripts/migration_safety_check.py` + CI step in `ci.yml` |
+| W03 — Redis Sentinel (3-node) deployed | Infrastructure | — | OPEN — infrastructure provisioning required |
+| I04 — `terminationGracePeriodSeconds: 120` + preStop hook | Infrastructure | — | OPEN — Kubernetes manifest update required |
+| All CE-01 through CE-10 chaos tests passing in staging | QA | — | OPEN — requires live staging environment |
+| RUNBOOKS.md updated with JWT rotation, DLQ remediation, DB migration, Redis recovery procedures | All teams | — | ✅ DONE — all four sections present + token family revocation runbook added |
 
 ---
 

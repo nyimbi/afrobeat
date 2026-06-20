@@ -414,6 +414,33 @@ kubectl rollout restart deployment/gbedu-api -n gbedu-prod
 4. Verify an upload and download succeed.
 5. Revoke old R2 key in Cloudflare dashboard.
 
+### Refresh token family revocation (FMEA S02)
+
+**When to use:** `auth.refresh_token_replay_detected` CRITICAL log appears — a refresh token that was already used (rotated) was presented again. This indicates a stolen token was replayed.
+
+**What happened automatically:** The API already set `refresh_family_revoked:{user_id}` in Redis with a 30-day TTL. The affected user's refresh tokens are all invalidated immediately — any subsequent `/auth/refresh` call returns 401.
+
+**Operator actions:**
+
+```bash
+# Confirm the revocation key is set (replace USER_ID with the UUID from the log)
+USER_ID="<user-id-from-log>"
+kubectl exec -it deployment/redis -n gbedu-prod -- \
+  redis-cli GET "refresh_family_revoked:${USER_ID}"
+# Should return "1"
+
+# Check what IP triggered the replay (grep structlog for the event)
+kubectl logs -l app=gbedu-api -n gbedu-prod --since=1h | \
+  grep "refresh_token_replay_detected" | grep "${USER_ID}"
+
+# If the incident is confirmed theft, also revoke any active access tokens by
+# updating the user's JWT version (requires a DB migration or admin endpoint).
+# For now, access tokens expire in 30 minutes — no further action needed unless
+# the access token lifetime is too long for the risk profile.
+```
+
+**User impact:** The affected user must log in again. Their active session is terminated. Notify them via email if the security event appears malicious (recommend password change).
+
 ---
 
 ## Postgres backup verification

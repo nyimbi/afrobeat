@@ -40,6 +40,11 @@ _EMAIL_VERIFY_PREFIX = "email_verify:"
 _RESET_TOKEN_PREFIX = "password_reset:"
 _TOKEN_BYTES = 32
 
+# FMEA S02: token family revocation — if a used (blocklisted) refresh token is
+# replayed it indicates theft. Invalidate the entire family for this user.
+_REFRESH_FAMILY_REVOKED_PREFIX = "refresh_family_revoked:"
+_REFRESH_FAMILY_REVOKE_TTL = 30 * 86400  # 30 days (> max refresh token lifetime)
+
 
 def _now() -> datetime:
 	return datetime.now(timezone.utc)
@@ -136,11 +141,33 @@ class AuthService:
 		blocklist_key = f"{_REFRESH_BLOCKLIST_PREFIX}{refresh_token[:64]}"
 		blocked = await self._redis.exists(blocklist_key)
 		if blocked:
+			# FMEA S02: a blocklisted (already-rotated) token was replayed.
+			# This is a strong signal of token theft — invalidate the entire
+			# refresh token family for this user to force re-authentication.
+			try:
+				cfg = self._settings.jwt
+				payload = verify_refresh_token(refresh_token, cfg.secret_key, cfg.algorithm)
+				stolen_user_id: str = payload.get("sub", "unknown")
+				family_key = f"{_REFRESH_FAMILY_REVOKED_PREFIX}{stolen_user_id}"
+				await self._redis.setex(family_key, _REFRESH_FAMILY_REVOKE_TTL, "1")
+				log.warning(
+					"auth.refresh_token_replay_detected",
+					user_id=stolen_user_id,
+					action="family_revoked",
+				)
+			except Exception:
+				pass  # best-effort; primary response is still TokenInvalidError
 			raise TokenInvalidError()
 
 		cfg = self._settings.jwt
 		payload = verify_refresh_token(refresh_token, cfg.secret_key, cfg.algorithm)
 		user_id: str = payload["sub"]
+
+		# FMEA S02: check if this user's entire token family has been revoked.
+		family_key = f"{_REFRESH_FAMILY_REVOKED_PREFIX}{user_id}"
+		if await self._redis.exists(family_key):
+			log.warning("auth.refresh_family_revoked", user_id=user_id)
+			raise TokenInvalidError()
 
 		result = await self._db.execute(
 			select(User).where(User.id == user_id, User.deleted_at.is_(None))

@@ -45,10 +45,20 @@ async def lifespan(app: FastAPI):
 	log.info("startup.database_ready")
 
 	# ── Redis ──────────────────────────────────────────────────────────────────
+	# FMEA A02: never crash on Redis unavailability — start in degraded mode so
+	# the API can still serve requests and retry Redis on the next operation.
+	# asyncio-redis reconnects automatically; rate-limiting falls back to in-process.
 	redis = Redis.from_url(settings.redis.url, decode_responses=False)
-	await redis.ping()
+	try:
+		await redis.ping()
+		log.info("startup.redis_ready")
+	except Exception as exc:
+		log.critical(
+			"startup.redis_unavailable",
+			error=str(exc),
+			action="degraded_mode_rate_limiting_in_process_only",
+		)
 	set_redis(redis)
-	log.info("startup.redis_ready")
 
 	# ── Storage client ─────────────────────────────────────────────────────────
 	from gbedu_api.services.storage_service import LocalStorageClient, StorageClient

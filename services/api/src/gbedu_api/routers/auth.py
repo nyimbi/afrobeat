@@ -29,6 +29,9 @@ class RegisterRequest(BaseModel):
 	email: EmailStr
 	password: str = Field(min_length=8, max_length=128)
 	full_name: str = Field(min_length=1, max_length=256)
+	# FMEA S05: honeypot — invisible to real users (hidden via CSS), filled only by bots.
+	# Named 'website' to look like a plausible form field. Must remain empty.
+	website: str | None = Field(default=None, exclude=True)
 
 
 class LoginRequest(BaseModel):
@@ -123,6 +126,14 @@ async def register(
 	db: Annotated[AsyncSession, Depends(get_db)],
 	redis: Annotated[Redis, Depends(get_redis)],
 ) -> RegisterResponse:
+	# FMEA S05: honeypot check — silently swallow bot registrations without
+	# creating an account. Returning 201 means the bot thinks it succeeded and
+	# won't retry or enumerate errors; legitimate clients never fill 'website'.
+	if body.website:
+		log.warning("auth.register.honeypot_triggered", email_prefix=str(body.email)[:8])
+		from fastapi.responses import JSONResponse
+		return JSONResponse(status_code=201, content={"user": {}, "tokens": {}})
+
 	svc = AuthService(db, redis)
 	try:
 		user, tokens = await svc.register(

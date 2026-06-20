@@ -31,7 +31,9 @@ class WebhookEvent(Base):
 	__tablename__ = "webhook_events"
 
 	id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7str)
-	event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+	# unique=True creates a unique constraint; PostgreSQL implicitly creates a
+	# unique index for it — no separate Index() needed.
+	event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
 	provider: Mapped[str] = mapped_column(
 		Enum(PaymentProvider, name="payment_provider", create_type=False),
 		nullable=False,
@@ -42,10 +44,6 @@ class WebhookEvent(Base):
 	)
 	metadata_: Mapped[dict[str, Any]] = mapped_column(
 		"metadata", JSONB, nullable=False, default=dict,
-	)
-
-	__table_args__ = (
-		Index("ix_webhook_events_event_id", "event_id"),
 	)
 
 

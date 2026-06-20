@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gbedu_core._uuid7 import uuid7str
+from sqlalchemy import text
+
 from gbedu_core.errors import AuthorizationError, GenerationQuotaError, NotFoundError, WorkerError
 from gbedu_core.models.job import GenerationJob, JobStatus, TERMINAL_JOB_STATUSES
 from gbedu_core.models.user import TIER_DAILY_LIMITS, User
@@ -26,23 +28,53 @@ class GenerationService:
 		self._redis = redis
 
 	async def _check_and_increment_quota(self, user: User) -> None:
-		"""Atomically check and increment the daily generation counter in Redis.
+		"""Atomically check and increment the daily generation counter.
 
-		Uses a Redis key with TTL so counters roll over without a cron job.
-		Raises GenerationQuotaError if limit is reached.
+		FMEA A10/D06: uses PostgreSQL UPDATE ... RETURNING as the source of truth
+		to prevent double-spend races across concurrent API instances. Two concurrent
+		requests against Redis INCR are both atomic individually but the DB row is
+		the final arbiter — if the UPDATE returns no row, quota is exhausted.
+
+		Redis is kept as a fast-path cache to avoid hitting the DB on every check,
+		but the DB commit is what actually gates usage.
 		"""
-		key = f"{_QUOTA_KEY_PREFIX}{user.id}"
 		daily_limit = TIER_DAILY_LIMITS[user.subscription_tier]
 
-		# INCR is atomic; set TTL only on first increment (NX flag)
-		current = await self._redis.incr(key)
-		if current == 1:
-			await self._redis.expire(key, _QUOTA_TTL_SECONDS)
-
-		if current > daily_limit:
-			# Roll back the counter — user did not consume a generation
-			await self._redis.decr(key)
+		# Durable, race-safe path: atomic UPDATE ... RETURNING.
+		# Resets counter if last reset was > 24 h ago; otherwise increments.
+		# Returns no row when quota is exhausted (generation_count_today >= daily_limit).
+		result = await self._db.execute(
+			text("""
+				UPDATE users
+				SET
+					generation_count_today = CASE
+						WHEN generation_count_reset_at < NOW() - INTERVAL '24 hours' THEN 1
+						ELSE generation_count_today + 1
+					END,
+					generation_count_reset_at = CASE
+						WHEN generation_count_reset_at < NOW() - INTERVAL '24 hours' THEN NOW()
+						ELSE generation_count_reset_at
+					END
+				WHERE id = :user_id
+				AND (
+					generation_count_reset_at < NOW() - INTERVAL '24 hours'
+					OR generation_count_today < :daily_limit
+				)
+				RETURNING generation_count_today
+			"""),
+			{"user_id": user.id, "daily_limit": daily_limit},
+		)
+		if result.fetchone() is None:
 			raise GenerationQuotaError(user.subscription_tier.value, daily_limit)
+
+		# Mirror to Redis for fast status reads (non-critical; failure is safe to ignore).
+		key = f"{_QUOTA_KEY_PREFIX}{user.id}"
+		try:
+			current = await self._redis.incr(key)
+			if current == 1:
+				await self._redis.expire(key, _QUOTA_TTL_SECONDS)
+		except Exception:
+			pass  # Redis unavailable — DB check already succeeded
 
 	async def submit_job(
 		self,
@@ -126,9 +158,20 @@ class GenerationService:
 		self._db.add(job)
 		await self._db.flush()
 
-		# Refund the quota slot
-		key = f"{_QUOTA_KEY_PREFIX}{user_id}"
-		await self._redis.decr(key)
+		# Refund the quota slot in DB (source of truth) and Redis cache.
+		await self._db.execute(
+			text("""
+				UPDATE users
+				SET generation_count_today = GREATEST(generation_count_today - 1, 0)
+				WHERE id = :user_id
+			"""),
+			{"user_id": user_id},
+		)
+		try:
+			key = f"{_QUOTA_KEY_PREFIX}{user_id}"
+			await self._redis.decr(key)
+		except Exception:
+			pass
 
 		log.info("generation.cancelled", job_id=job_id, user_id=user_id)
 

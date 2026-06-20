@@ -265,7 +265,7 @@ class LyricGenerator:
 		with torch.no_grad():
 			output_ids = self._model.generate(
 				input_ids,
-				max_new_tokens=1024,
+				max_new_tokens=settings.LLAMA_MAX_NEW_TOKENS,
 				do_sample=True,
 				temperature=0.8,
 				top_p=0.92,

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gbẹdu — Executive One-Pager</title>
+<style>
+  :root {
+    --gold: #F5C518; --coral: #FF4757; --purple: #6C35DE;
+    --navy: #0B0C1E; --mid: #13142E; --light: #1E2040;
+    --white: #FFFFFF; --muted: #8890B0; --green: #2ED573;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--navy); color: var(--white);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    line-height: 1.6; min-height: 100vh;
+  }
+  .page { max-width: 960px; margin: 0 auto; padding: 48px 40px; }
+
+  /* Header */
+  .header {
+    display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 48px;
+    padding-bottom: 40px; border-bottom: 2px solid var(--gold);
+  }
+  .logo { font-size: 48px; font-weight: 900; color: var(--gold); letter-spacing: -2px; }
+  .logo span { color: var(--white); }
+  .tagline { font-size: 17px; color: #C4C8E0; margin-top: 8px; }
+  .badge-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .badge {
+    background: rgba(108,53,222,0.2); border: 1px solid rgba(108,53,222,0.4);
+    border-radius: 999px; padding: 4px 14px; font-size: 12px; color: #C4C8E0;
+  }
+  .ask-box {
+    background: linear-gradient(135deg, #1A0A4A, var(--light));
+    border: 2px solid var(--gold); border-radius: 16px; padding: 28px 24px;
+    text-align: center; min-width: 200px;
+  }
+  .ask-amount { font-size: 48px; font-weight: 900; color: var(--gold); line-height: 1; }
+  .ask-label { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .ask-sub { font-size: 14px; color: #C4C8E0; margin-top: 12px; }
+
+  /* Body grid */
+  .body { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 36px; }
+  .col-left { display: flex; flex-direction: column; gap: 24px; }
+  .col-right { display: flex; flex-direction: column; gap: 24px; }
+
+  /* Cards */
+  .card {
+    background: var(--mid); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px; padding: 24px;
+  }
+  .card-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--gold); margin-bottom: 14px;
+  }
+  p.body-text { font-size: 14px; color: #C4C8E0; line-height: 1.65; }
+  ul.tight { list-style: none; }
+  ul.tight li { font-size: 14px; color: #C4C8E0; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  ul.tight li:last-child { border: none; }
+  ul.tight li strong { color: var(--white); }
+
+  /* Stats strip */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 32px; }
+  .stat { text-align: center; }
+  .stat-num { font-size: 32px; font-weight: 900; color: var(--gold); line-height: 1; }
+  .stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* Pipeline row */
+  .pipeline { display: flex; align-items: center; gap: 0; margin-top: 14px; }
+  .pip-step {
+    flex: 1; text-align: center; background: var(--light); border: 1px solid rgba(255,255,255,0.07);
+    padding: 12px 8px; font-size: 12px;
+  }
+  .pip-step:first-child { border-radius: 10px 0 0 10px; }
+  .pip-step:last-child { border-radius: 0 10px 10px 0; }
+  .pip-icon { font-size: 18px; display: block; margin-bottom: 4px; }
+  .pip-step span:last-child { color: var(--muted); font-size: 11px; }
+  .pip-arrow { color: var(--gold); font-size: 14px; flex-shrink: 0; }
+
+  /* Competitive table */
+  table.comp { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.comp th { color: var(--gold); text-align: left; padding: 8px 12px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1); }
+  table.comp td { padding: 9px 12px; color: #C4C8E0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  table.comp tr.us td { color: var(--gold); font-weight: 700; background: rgba(245,197,24,0.05); }
+  .yes { color: var(--green); }
+  .no { color: var(--coral); }
+
+  /* Proj table */
+  table.proj { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.proj th { color: var(--gold); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+  table.proj td { padding: 9px 10px; color: #C4C8E0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+
+  /* Footer */
+  .footer {
+    margin-top: 36px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.08);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px; color: var(--muted);
+  }
+  .footer strong { color: var(--gold); }
+
+  @media (max-width: 700px) {
+    .header { grid-template-columns: 1fr; }
+    .body { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media print {
+    body { background: white; color: black; }
+    .page { padding: 24px; }
+    @page { margin: 12mm; size: A4; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <div class="logo">Gbẹ<span>du</span></div>
+      <p class="tagline">The first AI music platform purpose-built for African genres — generating complete songs with authentic vocals, instruments, and lyrics in under two minutes.</p>
+      <div class="badge-row">
+        <span class="badge">🎵 Afrobeats · Amapiano · Soukous · Bongo Flava</span>
+        <span class="badge">🌍 15+ African Languages</span>
+        <span class="badge">🎙️ Full Vocal AI</span>
+      </div>
+    </div>
+    <div class="ask-box">
+      <div class="ask-amount">$2M</div>
+      <div class="ask-label">SEED ROUND</div>
+      <div class="ask-sub">18-month runway<br>to $500K MRR</div>
+    </div>
+  </div>
+
+  <!-- Stats strip -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num" style="color:var(--coral);">30%</div>
+      <div class="stat-label">Afrobeats YoY streaming growth</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">40M</div>
+      <div class="stat-label">African diaspora creators</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--purple);">$0</div>
+      <div class="stat-label">Purpose-built AI competitors</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" style="color:var(--green);">&lt;2m</div>
+      <div class="stat-label">Prompt to studio track</div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="col-left">
+
+      <!-- Problem -->
+      <div class="card">
+        <div class="card-title">The Problem</div>
+        <ul class="tight">
+          <li>🎙️ A professional Afrobeats single costs <strong>$3K–$15K</strong> to produce — pricing out most Lagos, Nairobi &amp; Accra creators</li>
+          <li>🌐 Suno, Udio &amp; Soundraw generate generic Western pop. No African genre depth, wrong drum timing, no Pidgin/Yoruba/Swahili support</li>
+          <li>🔑 Industry gatekeepers control who gets produced &amp; promoted — talent alone is not enough</li>
+        </ul>
+      </div>
+
+      <!-- Pipeline -->
+      <div class="card">
+        <div class="card-title">How It Works</div>
+        <div class="pipeline">
+          <div class="pip-step"><span class="pip-icon">✍️</span>Prompt<span>Genre · Mood · Lang</span></div>
+          <div class="pip-arrow">›</div>
+          <div class="pip-step"><span class="pip-icon">🤖</span>Lyrics AI<span>Llama-3 SFT</span></div>
+          <div class="pip-arrow">›</div>
+          <div class="pip-step"><span class="pip-icon">🎵</span>Music+Vocals<span>ACE-Step 1.5</span></div>
+          <div class="pip-arrow">›</div>
+          <div class="pip-step"><span class="pip-icon">🎛️</span>Master<span>DSP pipeline</span></div>
+          <div class="pip-arrow">›</div>
+          <div class="pip-step"><span class="pip-icon">☁️</span>Deliver<span>R2 · CDN</span></div>
+        </div>
+      </div>
+
+      <!-- Competitive -->
+      <div class="card">
+        <div class="card-title">Competitive Landscape</div>
+        <table class="comp">
+          <thead>
+            <tr><th>Platform</th><th>African genres</th><th>Local langs</th><th>Full vocals</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Suno AI</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+            <tr><td>Udio</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+            <tr><td>Soundraw</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+            <tr><td>Audiomack Create</td><td class="yes">Partial</td><td class="no">✗</td><td class="no">✗</td></tr>
+            <tr class="us"><td>Gbẹdu</td><td class="yes">✓ 14 genres</td><td class="yes">✓ 15+ langs</td><td class="yes">✓ ACE-Step</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+    <div class="col-right">
+
+      <!-- Business Model -->
+      <div class="card">
+        <div class="card-title">Business Model</div>
+        <ul class="tight">
+          <li>🔄 <strong>SaaS subscriptions</strong> — $12 Starter · $49 Creator · $299 Pro Label</li>
+          <li>🎤 <strong>Voice licensing</strong> — Artists earn 70% of every use of their voice model</li>
+          <li>🏢 <strong>Enterprise API</strong> — Audiomack, Boomplay, TikTok Africa embedded access</li>
+          <li>🎶 <strong>Beat marketplace</strong> — $49 non-exclusive · $499 exclusive instrumental licences</li>
+        </ul>
+      </div>
+
+      <!-- Financials -->
+      <div class="card">
+        <div class="card-title">Financial Projections (Base Case)</div>
+        <table class="proj">
+          <thead>
+            <tr><th></th><th>Year 1</th><th>Year 2</th><th>Year 3</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ARR</td><td>$1.2M</td><td>$6.3M</td><td>$18.5M</td></tr>
+            <tr><td>Paying users</td><td>2,000</td><td>9,500</td><td>28,000</td></tr>
+            <tr><td>Gross margin</td><td>55%</td><td>68%</td><td>74%</td></tr>
+            <tr><td>EBITDA</td><td style="color:var(--coral)">–$1.1M</td><td style="color:var(--coral)">–$0.3M</td><td style="color:var(--green)">+$4.8M</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:11px;color:var(--muted);margin-top:10px;">Break-even at month 22. Series A trigger: $500K MRR.</p>
+      </div>
+
+      <!-- Use of funds -->
+      <div class="card">
+        <div class="card-title">Use of $2M Seed</div>
+        <ul class="tight">
+          <li>🖥️ <strong>40%</strong> — ML infrastructure, GPU compute, model training</li>
+          <li>👩‍💻 <strong>25%</strong> — Engineering team (4 hires: ML, backend, frontend, DevOps)</li>
+          <li>📣 <strong>20%</strong> — Creator acquisition, influencer partnerships, launch marketing</li>
+          <li>⚖️ <strong>10%</strong> — Legal, music licensing, IP registration</li>
+          <li>🏢 <strong>5%</strong> — Operations</li>
+        </ul>
+      </div>
+
+      <!-- Traction -->
+      <div class="card">
+        <div class="card-title">Traction Today</div>
+        <ul class="tight">
+          <li>✦ Full generation pipeline: prompt → MP3 in &lt;2 min on Apple Silicon</li>
+          <li>✦ 14 African genres · 15+ languages · 5 vocal styles — all working</li>
+          <li>✦ Production-grade API stack (FastAPI + Celery + Postgres + R2)</li>
+          <li>✦ African lyrics corpus: 30+ real songs, web-curated, properly attributed</li>
+          <li>✦ 196 unit tests passing · pedalboard mastering pipeline · stem separation</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div><strong>Gbẹdu</strong> · hello@gbedu.io · gbedu.io</div>
+    <div>Confidential — for authorised recipients only</div>
+    <div>Seed Round · $2M · 2024</div>
+  </div>
+
+</div>
+</body>
+</html>

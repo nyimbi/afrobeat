@@ -45,6 +45,8 @@ def test_jwt_custom_secret_accepted_in_production() -> None:
 		"ENVIRONMENT": "production",
 		"DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
 		"JWT_SECRET_KEY": "s3cur3-r4nd0m-64-char-secret-that-is-definitely-not-the-default!!",
+		"STRIPE_SECRET_KEY": "sk_live_test_placeholder",
+		"PAYSTACK_SECRET_KEY": "sk_live_test_placeholder",
 	}
 	with mock.patch.dict(os.environ, env, clear=False):
 		s = Settings()
@@ -91,6 +93,19 @@ async def _make_redis_mock(set_returns: bool) -> AsyncMock:
 	return redis
 
 
+def _make_db_mock() -> AsyncMock:
+	"""Build a DB session mock where execute().scalar_one_or_none() returns None.
+
+	AsyncMock().scalar_one_or_none() returns a truthy AsyncMock by default,
+	which causes the webhook handler to think every event is a duplicate.
+	"""
+	db = AsyncMock()
+	db_result = MagicMock()
+	db_result.scalar_one_or_none.return_value = None
+	db.execute = AsyncMock(return_value=db_result)
+	return db
+
+
 async def test_stripe_webhook_atomic_claim_on_first_delivery() -> None:
 	"""First delivery claims the key with SET NX and proceeds to handle the event."""
 	from gbedu_api.routers.payments import stripe_webhook
@@ -109,7 +124,7 @@ async def test_stripe_webhook_atomic_claim_on_first_delivery() -> None:
 		mock_settings.return_value.stripe.secret_key = "sk_test"
 		mock_settings.return_value.stripe.webhook_secret = "whsec_test"
 
-		db = AsyncMock()
+		db = _make_db_mock()
 		result = await stripe_webhook(request=request, db=db, redis=redis)
 
 	assert result == {"status": "ok"}
@@ -162,7 +177,7 @@ async def test_stripe_webhook_releases_claim_on_handler_failure() -> None:
 		mock_settings.return_value.stripe.secret_key = "sk_test"
 		mock_settings.return_value.stripe.webhook_secret = "whsec_test"
 
-		db = AsyncMock()
+		db = _make_db_mock()
 		with pytest.raises(HTTPException) as exc_info:
 			await stripe_webhook(request=request, db=db, redis=redis)
 

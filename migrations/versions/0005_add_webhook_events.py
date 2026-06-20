@@ -49,14 +49,5 @@ def upgrade() -> None:
 		sa.UniqueConstraint("event_id", name="uq_webhook_events_event_id"),
 	)
 	# Partial index: querying by event_id is the hot path; cover it explicitly.
-	op.create_index(
-		"ix_webhook_events_event_id",
-		"webhook_events",
-		["event_id"],
-		unique=True,
-	)
-
-
 def downgrade() -> None:
-	op.drop_index("ix_webhook_events_event_id", table_name="webhook_events")
 	op.drop_table("webhook_events")

@@ -64,6 +64,48 @@ async def _load_model(name: str, model: Any) -> None:
 		log.warning("model.load.failed", name=name, error=str(exc))
 
 
+_GPU_WATCHDOG_INTERVAL_SECONDS = 60
+_GPU_LEAK_ALERT_CONSECUTIVE = 5   # alert after this many monotonically rising samples
+
+
+async def _gpu_memory_watchdog() -> None:
+	"""Background task: detect GPU VRAM leaks (FMEA M02).
+
+	Samples torch.cuda.memory_reserved() every minute. If reserved memory
+	grows for _GPU_LEAK_ALERT_CONSECUTIVE consecutive samples (5 min default)
+	without a generation completing in that window, log CRITICAL so alerting
+	fires. Does NOT kill the process — that's for the operator to decide.
+	"""
+	samples: list[float] = []
+	while True:
+		try:
+			await asyncio.sleep(_GPU_WATCHDOG_INTERVAL_SECONDS)
+			if not torch.cuda.is_available():
+				continue
+
+			reserved_mb = torch.cuda.memory_reserved(0) / 1024**2
+			log.debug("gpu.watchdog.sample", reserved_mb=round(reserved_mb, 1))
+
+			samples.append(reserved_mb)
+			if len(samples) > _GPU_LEAK_ALERT_CONSECUTIVE:
+				samples.pop(0)
+
+			if (
+				len(samples) == _GPU_LEAK_ALERT_CONSECUTIVE
+				and all(samples[i] < samples[i + 1] for i in range(len(samples) - 1))
+			):
+				log.critical(
+					"gpu.memory_leak_suspected",
+					samples_mb=[round(s, 1) for s in samples],
+					latest_mb=round(reserved_mb, 1),
+					action="investigate_and_restart_ml_service_if_confirmed",
+				)
+		except asyncio.CancelledError:
+			return
+		except Exception as exc:
+			log.warning("gpu.watchdog.error", error=str(exc))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 	global _ace_step, _stable_audio, _yue
@@ -110,7 +152,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 	_startup_time = time.perf_counter() - t0
 	log.info("gbedu_ml.startup.done", elapsed_seconds=round(_startup_time, 2))
 
+	# FMEA M02: GPU memory leak watchdog — sample reserved VRAM every 60 s.
+	# Alert CRITICAL if reserved memory grows monotonically for 5 consecutive
+	# samples (5 min trend) without a generation completing — likely a leak.
+	gpu_watchdog_task = asyncio.create_task(_gpu_memory_watchdog())
+
 	yield
+
+	gpu_watchdog_task.cancel()
+	try:
+		await gpu_watchdog_task
+	except asyncio.CancelledError:
+		pass
 
 	# ── Shutdown ───────────────────────────────────────────────────────────────
 	log.info("gbedu_ml.shutdown.begin")

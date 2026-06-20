@@ -66,6 +66,18 @@ _IDEMPOTENCY_TTL = 86_400
 _CHECKPOINT_TTL = 7_200
 _CHECKPOINT_PREFIX = "pipeline_ckpt:"
 
+# Per-stage wall-clock deadlines (FMEA M05).
+# ml_generate covers 3 tenacity retries × 300 s each + 2 × 270 s backoff ≈ 1440 s.
+# Values are conservative upper bounds; a hung stage is forced to fail instead of
+# consuming a Celery slot indefinitely.
+_STAGE_TIMEOUT_SECONDS: dict[str, int] = {
+	"ml_generate":    1500,   # 25 min — covers worst-case tenacity retry chain
+	"audio_process":  300,    # 5 min
+	"upload":         180,    # 3 min
+	"create_track":   60,     # 1 min
+	"complete":       30,     # 30 s
+}
+
 
 class GenerationPipelineOrchestrator:
 	"""Drives a single GenerationJob through its full lifecycle.
@@ -102,11 +114,26 @@ class GenerationPipelineOrchestrator:
 				return {"status": "skipped", "reason": "already_terminal", "job_status": job.status.value}
 
 			try:
-				ml_result = await self._stage_ml_generate(job)
-				processed = await self._stage_audio_process(job, ml_result)
-				urls = await self._stage_upload(job, processed)
-				track = await self._stage_create_track(job, ml_result, urls)
-				await self._stage_complete(job, track, ml_result)
+				ml_result = await asyncio.wait_for(
+					self._stage_ml_generate(job),
+					timeout=_STAGE_TIMEOUT_SECONDS["ml_generate"],
+				)
+				processed = await asyncio.wait_for(
+					self._stage_audio_process(job, ml_result),
+					timeout=_STAGE_TIMEOUT_SECONDS["audio_process"],
+				)
+				urls = await asyncio.wait_for(
+					self._stage_upload(job, processed),
+					timeout=_STAGE_TIMEOUT_SECONDS["upload"],
+				)
+				track = await asyncio.wait_for(
+					self._stage_create_track(job, ml_result, urls),
+					timeout=_STAGE_TIMEOUT_SECONDS["create_track"],
+				)
+				await asyncio.wait_for(
+					self._stage_complete(job, track, ml_result),
+					timeout=_STAGE_TIMEOUT_SECONDS["complete"],
+				)
 
 				elapsed = time.monotonic() - start_ts
 				record_generation_duration(
