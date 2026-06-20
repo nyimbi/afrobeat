@@ -150,3 +150,4 @@ dump.rdb
 *.pdf
 *.pptx
 *.pdf
+*.pyc
