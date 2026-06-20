@@ -1,0 +1,17 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gbedu-worker
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-worker
+    app.kubernetes.io/name: gbedu-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: gbedu
+spec:
+  # Guarantee at least 1 worker is always available to drain the generation queue.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: gbedu-worker

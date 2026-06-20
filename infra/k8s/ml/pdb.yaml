@@ -1,0 +1,19 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+spec:
+  # Allow at most 1 ML pod to be unavailable during node drains / rolling updates.
+  # With minReplicas=1 this effectively blocks voluntary disruptions — intentional:
+  # ML pods take 10+ minutes to reload model weights.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: gbedu-ml

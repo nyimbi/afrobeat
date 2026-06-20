@@ -40,3 +40,35 @@ def enqueue_voice_training(voice_model_id: str) -> None:
 		log.info("worker.enqueue.voice_training", voice_model_id=voice_model_id)
 	except ImportError:
 		log.warning("worker.not_installed", task="train_voice_model", voice_model_id=voice_model_id)
+
+
+def enqueue_welcome_email(user_id: str) -> None:
+	assert user_id, "user_id required"
+	try:
+		from gbedu_worker.tasks.notifications import send_welcome_email
+		send_welcome_email.delay(user_id)
+		log.info("worker.enqueue.welcome_email", user_id=user_id)
+	except ImportError:
+		log.warning("worker.not_installed", task="send_welcome_email", user_id=user_id)
+
+
+def enqueue_verify_email(user_id: str, verify_url: str) -> None:
+	assert user_id, "user_id required"
+	assert verify_url, "verify_url required"
+	try:
+		from gbedu_worker.tasks.notifications import send_verify_email
+		send_verify_email.delay(user_id, verify_url)
+		log.info("worker.enqueue.verify_email", user_id=user_id)
+	except ImportError:
+		log.warning("worker.not_installed", task="send_verify_email", user_id=user_id)
+
+
+def enqueue_password_reset_email(user_id: str, reset_url: str) -> None:
+	assert user_id, "user_id required"
+	assert reset_url, "reset_url required"
+	try:
+		from gbedu_worker.tasks.notifications import send_password_reset_email
+		send_password_reset_email.delay(user_id, reset_url)
+		log.info("worker.enqueue.password_reset_email", user_id=user_id)
+	except ImportError:
+		log.warning("worker.not_installed", task="send_password_reset_email", user_id=user_id)

@@ -92,6 +92,64 @@ def send_welcome_email(self: Task, user_id: str) -> dict[str, Any]:
 
 @app.task(
 	bind=True,
+	name="gbedu_worker.tasks.notifications.send_verify_email",
+	max_retries=3,
+	acks_late=True,
+	queue="low",
+	soft_time_limit=30,
+	time_limit=45,
+)
+def send_verify_email(self: Task, user_id: str, verify_url: str) -> dict[str, Any]:
+	"""Send email verification link. Idempotent — duplicate sends within 24 h are no-ops."""
+	assert user_id, "user_id required"
+	assert verify_url, "verify_url required"
+
+	task_log = log.bind(user_id=user_id, task_id=self.request.id)
+	task_log.info("send_verify_email task received")
+
+	with tracer.start_as_current_span("task.send_verify_email") as span:
+		span.set_attribute("user.id", user_id)
+		try:
+			return run_async(_send_verify_email(user_id, verify_url))
+		except Exception as exc:
+			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
+			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
+			span.record_exception(exc)
+			span.set_status(trace.StatusCode.ERROR, str(exc))
+			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+
+
+@app.task(
+	bind=True,
+	name="gbedu_worker.tasks.notifications.send_password_reset_email",
+	max_retries=3,
+	acks_late=True,
+	queue="low",
+	soft_time_limit=30,
+	time_limit=45,
+)
+def send_password_reset_email(self: Task, user_id: str, reset_url: str) -> dict[str, Any]:
+	"""Send password-reset link. Idempotent — duplicate sends within 1 h are no-ops."""
+	assert user_id, "user_id required"
+	assert reset_url, "reset_url required"
+
+	task_log = log.bind(user_id=user_id, task_id=self.request.id)
+	task_log.info("send_password_reset_email task received")
+
+	with tracer.start_as_current_span("task.send_password_reset_email") as span:
+		span.set_attribute("user.id", user_id)
+		try:
+			return run_async(_send_password_reset(user_id, reset_url))
+		except Exception as exc:
+			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
+			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
+			span.record_exception(exc)
+			span.set_status(trace.StatusCode.ERROR, str(exc))
+			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+
+
+@app.task(
+	bind=True,
 	name="gbedu_worker.tasks.notifications.send_subscription_confirmation",
 	max_retries=3,
 	acks_late=True,
@@ -184,6 +242,68 @@ async def _send_welcome(user_id: str) -> dict[str, Any]:
 
 	await _mark_sent(dedup_key)
 	log.info("welcome email sent", user_id=user_id)
+	return {"status": "sent", "user_id": user_id}
+
+
+async def _send_verify_email(user_id: str, verify_url: str) -> dict[str, Any]:
+	dedup_key = f"email:verify:{user_id}"
+	if await _already_sent(dedup_key):
+		log.info("verify email already sent — skipping", user_id=user_id)
+		return {"status": "skipped", "reason": "duplicate"}
+
+	async with get_async_session() as session:
+		user = await session.get(User, user_id)
+		if user is None:
+			log.warning("send_verify_email: user not found", user_id=user_id)
+			return {"status": "skipped", "reason": "user_not_found"}
+
+		email_svc = _build_email_service()
+		await email_svc.send(
+			to=user.email,
+			subject="Verify your Gbẹdu email address",
+			template="verify_email",
+			context={
+				"user_name": user.full_name.split()[0],
+				"verify_url": verify_url,
+			},
+		)
+
+	await _mark_sent(dedup_key)
+	log.info("verify email sent", user_id=user_id)
+	return {"status": "sent", "user_id": user_id}
+
+
+async def _send_password_reset(user_id: str, reset_url: str) -> dict[str, Any]:
+	# Password reset tokens are short-lived — dedup window is 1 h, not 24 h.
+	dedup_key = f"email:reset:{user_id}"
+	if await _already_sent(dedup_key):
+		log.info("password reset email already sent — skipping", user_id=user_id)
+		return {"status": "skipped", "reason": "duplicate"}
+
+	async with get_async_session() as session:
+		user = await session.get(User, user_id)
+		if user is None:
+			log.warning("send_password_reset_email: user not found", user_id=user_id)
+			return {"status": "skipped", "reason": "user_not_found"}
+
+		email_svc = _build_email_service()
+		await email_svc.send(
+			to=user.email,
+			subject="Reset your Gbẹdu password",
+			template="reset_password",
+			context={
+				"user_name": user.full_name.split()[0],
+				"reset_url": reset_url,
+			},
+		)
+
+	# Short TTL (1 h) — reset tokens expire, no point re-deduping across days.
+	import redis.asyncio as aioredis
+	r = await aioredis.from_url(_redis_settings.url, encoding="utf-8", decode_responses=True)
+	async with r:
+		await r.setex(f"email_sent:{dedup_key}", 3_600, "1")
+
+	log.info("password reset email sent", user_id=user_id)
 	return {"status": "sent", "user_id": user_id}
 
 

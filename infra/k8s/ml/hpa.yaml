@@ -1,0 +1,47 @@
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gbedu-ml
+  namespace: gbedu-prod
+  labels:
+    app: gbedu-ml
+    app.kubernetes.io/name: gbedu-ml
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: gbedu
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gbedu-ml
+  # ML pods are GPU-bound — scale conservatively to avoid thrashing on VRAM.
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleDown:
+      # Long stabilization window — GPU pods take ~10 min to load models.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+      selectPolicy: Max

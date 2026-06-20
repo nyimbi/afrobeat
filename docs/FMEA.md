@@ -1,467 +1,280 @@
-# Gbẹdu FMEA — Failure Mode and Effects Analysis
+# Gbẹdu — Failure Mode and Effects Analysis (FMEA)
 
-**Version:** 1.0  
-**Date:** 2026-06-15  
-**Author:** Platform Engineering  
-**Status:** Living document — update whenever RPN > 200 items are remediated or new components are added.
-
----
-
-## 1. Scope and SLO Targets
-
-### In Scope
-
-All production components of the Gbẹdu platform:
-
-- `gbedu-api` — FastAPI service on port 8000 (routers: `auth`, `users`, `generations`, `tracks`, `payments`, `marketplace`, `voice_models`)
-- `gbedu-ml` — FastAPI ML inference service on port 8001 (ACE-Step 1.5 → Stable Audio 3.0 → YuE fallback chain)
-- `gbedu-worker` — Celery task queue (generation pipeline: ML inference → DSP → R2 upload → DB write)
-- `gbedu-web` — Next.js 14 frontend on port 3000
-- PostgreSQL 16 — primary relational store (`pool_size=20`, `max_overflow=40`, `pool_recycle=3600s`)
-- Redis 7 — Celery broker (db 1), results backend (db 2), API cache (db 0)
-- Cloudflare R2 — audio file storage (bucket: `gbedu-audio`)
-- Kubernetes deployment — HPA, PDB, RBAC, namespaced secrets
-
-### Out of Scope
-
-Cloudflare CDN edge layer, DNS propagation failures, upstream HuggingFace Hub outages during initial model downloads, end-user device/browser failures.
-
-### SLO Targets
-
-| SLO | Target | Error Budget (30-day) |
-|-----|--------|-----------------------|
-| API availability | 99.9% | 43.2 minutes |
-| Generation submission (p95) | < 2 seconds | — |
-| Generation completion (p95) | < 5 minutes | — |
-| API p99 latency | < 500 ms | — |
-| Payment webhook processing | < 10 seconds | — |
-
-### RPN Scoring Method
-
-- **Severity (S):** 1 (negligible) → 10 (total service loss / data loss / financial loss)
-- **Probability (P):** 1 (near impossible) → 10 (happens multiple times per week in production)
-- **Detectability (D):** 1 (immediately obvious, auto-alerted) → 10 (silent failure, no current detection)
-- **RPN = S × P × D** — anything above 100 requires a remediation item; above 200 is P0.
+**Document version**: 2.0
+**Date**: 2026-06-20
+**Authors**: Platform Engineering
+**Status**: DRAFT — requires sign-off before production launch
 
 ---
 
-## 2. FMEA Table
+## Executive Summary
 
-| ID | Component | Failure Mode | Effect on System | S | P | D | RPN | Current Mitigation | Recommended Action |
-|----|-----------|--------------|-----------------|---|---|---|-----|--------------------|--------------------|
-| F-01 | PostgreSQL / SQLAlchemy | DB connection pool exhaustion (`pool_size=20`, `max_overflow=40` → hard cap 60 connections) | All API requests requiring DB access queue behind the pool. Requests exceeding asyncpg's internal wait timeout raise `TimeoutError`, returning 500 to users. Celery tasks also share the DB; generation pipeline stalls. | 9 | 4 | 3 | **108** | `pool_pre_ping=True` evicts dead connections. `pool_recycle=3600s` prevents stale connections. structlog emits pool events. | Add `db_pool_checkedout` Prometheus gauge. Alert at > 35 (58%). Profile slow queries holding connections. Consider PgBouncer in transaction mode between API pods and Postgres to multiply effective concurrency. |
-| F-02 | Redis 7 | Redis unavailability (pod OOM kill, network partition, node failure) | Celery broker (db 1) unreachable: no new tasks enqueued, no existing tasks picked up. Result backend (db 2) unavailable: task status polling returns errors. API cache (db 0) miss forces all reads to DB. SlowAPI rate limiter loses state (Redis-backed), potentially allowing burst traffic directly to API. | 9 | 3 | 2 | **54** | `acks_late=True` + `reject_on_worker_lost=True` ensure in-flight tasks are not lost. Redis deployed as single-node in current config. | Deploy Redis Sentinel or Redis Cluster. Configure `CELERY_BROKER_TRANSPORT_OPTIONS` with `visibility_timeout` and connection retry policy. Implement Redis health check in `/api/v1/health` endpoint. |
-| F-03 | Celery worker | Worker process crash mid-generation (OOM, segfault from librosa/demucs, uncaught exception in orchestrator) | In-flight generation job is lost from the in-memory prefetch queue. With `acks_late=True` and `reject_on_worker_lost=True`, the message is requeued to `default`. Generation job re-runs from the beginning (ML inference + DSP + upload all re-executed). User waits up to `_RETRY_COUNTDOWN[0]` = 30 seconds before retry begins. If the crash is deterministic (same input triggers same crash), the task will exhaust all 3 retries (30s + 90s + 270s = 390s delay) then route to `gbedu.dlq`. | 7 | 4 | 2 | **56** | `acks_late=True`, `reject_on_worker_lost=True`, DLQ routing in `_route_to_dlq()`. `soft_time_limit=720s`, `time_limit=780s`. Structured exception logging with full `traceback`. | Each pipeline stage should checkpoint its output status to DB (`STAGE_ML_DONE`, `STAGE_DSP_DONE`, `STAGE_UPLOADED`) so retries resume from last completed stage rather than re-running from scratch. Currently `GenerationPipelineOrchestrator.run()` has no mid-pipeline checkpointing visible in the task wrapper. |
-| F-04 | ML service (gbedu-ml) | GPU/MPS out-of-memory during ACE-Step 1.5 inference (large batch, long duration request) | `torch.cuda.OutOfMemoryError` raised inside `model.generate_safe()`. `MusicGenerator.generate()` catches it as a generic `Exception`, records the failure, and falls through to Stable Audio 3.0. If all three models OOM (unlikely unless GPU is shared with other processes), raises `GenerationError`. Celery task receives `MLServiceError` (if the ML service returns 5xx) and schedules a retry. GPU memory fragmentation may persist until pod restart, causing cascading OOM for subsequent requests. | 8 | 5 | 3 | **120** | Three-model fallback chain: ACE-Step → Stable Audio → YuE. `circuit_failure_threshold=5`, `circuit_recovery_timeout=60s`. | Add CUDA memory pre-check before inference: reject request if `torch.cuda.memory_reserved() / torch.cuda.get_device_properties(0).total_memory > 0.85`. Implement per-request GPU memory limit with `torch.cuda.set_per_process_memory_fraction()`. Alert on `ml_gpu_memory_used_pct > 80`. |
-| F-05 | ML service (gbedu-ml) | All three circuit breakers simultaneously open (ACE-Step + Stable Audio + YuE all tripped) | `MusicGenerator.generate()` skips all three models (checking `model.circuit_open` before each attempt), immediately raises `GenerationError("All music generation models failed")`. Every generation request fails instantly. Celery worker marks tasks as `FAILURE` after exhausting retries. DLQ backlog grows. Users see generation failure notifications. Revenue impact: direct if subscription tiers are metered on completions. | 10 | 2 | 2 | **40** | Per-model circuit breakers with `failure_threshold=5`, `recovery_timeout=60s`. Separate breaker state per model means one model's failures don't directly trip others. structlog warning on each skip. | Add a `/api/v1/health` check that aggregates all three circuit breaker states. If all three are open, return HTTP 503 with `Retry-After` header. Expose `ml_circuit_open{model="ace_step|stable_audio|yue"}` Prometheus counter. Alert: CRITICAL if count of open circuits >= 2. |
-| F-06 | ML service (gbedu-ml) | ACE-Step circuit breaker stuck open past `recovery_timeout=60s` (half-open probe also fails) | ACE-Step, the highest-quality model, is permanently bypassed. All traffic falls to Stable Audio 3.0 or YuE. Output quality degrades noticeably — Stable Audio 3.0 is less fine-tuned for Afrobeats; YuE is a last-resort model. No user-visible error, but quality SLA is violated silently. | 6 | 3 | 7 | **126** | Circuit breaker implements half-open recovery probe. `recovery_timeout=60s` configured in `MLSettings`. | Expose `ml_model_active{model="..."}` metric showing which model is currently serving. Alert on Slack (non-paging) if ACE-Step circuit has been open for > 5 minutes. Implement admin endpoint `POST /api/v1/admin/ml/reset-circuit?model=ace_step` (auth-gated, staff role only). |
-| F-07 | Cloudflare R2 | Audio upload failure after successful ML generation and DSP processing | `UploadError` raised in the upload stage. Celery task catches it as a `_RETRYABLE_EXCEPTIONS` member and schedules retry with countdown `[30, 90, 270]` seconds. Three retries means up to 390 seconds of additional wait, then DLQ. The generated audio file exists on the worker pod's ephemeral local disk (`audio_path` from `MusicGenerationResult`). If the pod is evicted or OOM-killed between retries, the local file is gone and the retry will fail with a missing-file error (which is not retryable), masking the original R2 failure. | 7 | 3 | 3 | **63** | `UploadError` classified as retryable. Exponential backoff retry. DLQ on exhaustion. | Store generated audio to a shared volume or S3-compatible staging bucket before attempting R2 upload, so retries have access to the file regardless of pod lifecycle. Alternatively, upload immediately from ML service to R2 and pass the URL to the worker, removing the local-file dependency. |
-| F-08 | Payments (Stripe) | Webhook duplicate delivery (Stripe retries on non-2xx, or network blip causes double delivery) | Payment event processed twice. Depending on idempotency implementation in `payments` router, this could result in double credit grant (user gets 2x subscription credits), double email, or double DB record. | 8 | 5 | 4 | **160** | Stripe sends `stripe-signature` header for HMAC-SHA256 verification. `STRIPE_WEBHOOK_SECRET` configured in `StripeSettings`. | Implement webhook idempotency table: `webhook_events(event_id TEXT PRIMARY KEY, processed_at TIMESTAMPTZ)`. On receipt, `INSERT OR IGNORE` by `event.id`. Process only if insert succeeded. Add unique index. This is a common Stripe integration pattern and is not implemented based on current code review. |
-| F-09 | Payments (Paystack) | HMAC validation failure on Paystack webhook (misconfigured `PAYSTACK_SECRET_KEY`, rotated key, or spoofed request) | Paystack webhook rejected, payment not recorded in DB. Nigerian users' subscriptions not activated. Support load increases. If the failure is systematic (e.g., after a key rotation), all Paystack events are silently dropped. | 7 | 3 | 6 | **126** | `PAYSTACK_SECRET_KEY` configured in `PaystackSettings`. HMAC computed against `x-paystack-signature` header. | Log every HMAC validation failure with the source IP and raw payload hash (not payload body — PII concern). Alert on > 3 consecutive Paystack HMAC failures within 60 seconds (could indicate key rotation or spoofing). Add `paystack_webhook_hmac_failures_total` counter metric. |
-| F-10 | Auth (gbedu-api) | JWT secret key compromise (`JWT_SECRET_KEY`, default `"change-this-in-production"`) | Attacker can forge arbitrary JWT tokens, impersonate any user including admin accounts. Full account takeover across all users who have active sessions. In the worst case, attacker can access voice model data, payment information, and private tracks of all users. | 10 | 2 | 8 | **160** | `JWTSettings.secret_key` loaded from `JWT_SECRET_KEY` env var. Kubernetes Secrets mount in production. HTTPS-only in production (`HTTPSRedirectMiddleware`). Access token TTL: `ACCESS_TOKEN_EXPIRE_MINUTES=30`. Refresh token TTL: `REFRESH_TOKEN_EXPIRE_DAYS=30`. | (1) Rotate to RS256 (asymmetric): sign with private key, verify with public key — compromise of the verification key does not enable token forgery. (2) Add JWT `jti` (JWT ID) claim and a Redis-backed token revocation list checked on every request. (3) Alert on > 50 failed JWT decode attempts per minute per IP (brute-force indicator). (4) Scan for default value `"change-this-in-production"` in CI: `if JWT_SECRET_KEY == "change-this-in-production": raise RuntimeError`. |
-| F-11 | Database / Alembic | Migration failure on production deploy (`alembic upgrade head` fails mid-migration) | If migration is non-transactional (e.g., `CREATE INDEX CONCURRENTLY`, which cannot run inside a transaction), Alembic's `alembic_version` table may not be updated, leaving DB in a partial state. New API pods start against partially-migrated schema, causing SQLAlchemy `OperationalError` (missing column/table). Rollback requires manual `alembic downgrade`. | 9 | 3 | 4 | **108** | `RUNBOOKS.md` documents "Database migration procedure". Every migration must implement `downgrade()`. Two-phase column removal policy documented in `CLAUDE.md`. | (1) Run `alembic upgrade --sql | review` in CI before applying to prod. (2) Run migrations as a Kubernetes pre-upgrade Job (not inside the app container startup) with a timeout. (3) Store last-known-good migration ID in a config map; auto-rollback if the Job fails. (4) `CREATE INDEX CONCURRENTLY` requires a separate migration file run outside a transaction — document this explicitly in migration template. |
-| F-12 | Celery worker / DSP | Audio DSP pipeline crash: librosa or demucs OOM during stem separation on a long track (> 4 minutes) | `MemoryError` or OS kill (`SIGKILL`) inside `gbedu_audio` pipeline functions. If `SIGKILL`, Celery cannot catch it — the worker process dies, `reject_on_worker_lost=True` requeues the message. If `MemoryError`, Python catches it but the state may be corrupt; the task retries the full pipeline including re-running ML inference. Very long tracks (8+ minutes at 44.1 kHz stereo = ~84MB raw) can exhaust a 4GB worker memory limit. | 7 | 4 | 3 | **84** | `reject_on_worker_lost=True` handles hard kills. `soft_time_limit=720s` kills stuck tasks cleanly (raises `SoftTimeLimitExceeded`). Retry logic handles `MemoryError` if it propagates. | Set explicit maximum track duration in generation request schema (`max_duration_seconds=480`). Run DSP in a subprocess (via `asyncio.create_subprocess_exec`) with its own memory limit (`resource.setrlimit(RLIMIT_AS, ...)`) so DSP OOM kills only the subprocess, not the Celery worker. |
-| F-13 | ML service (gbedu-ml) | RVC voice conversion crash (model weight incompatibility, CUDA kernel mismatch, or corrupt speaker embedding) | `voice_models` router endpoint returns 500. User's custom voice model fails to apply. Base generation still succeeds (RVC is post-processing, applied after `MusicGenerator.generate()`). If RVC crash is deterministic for a specific voice model file, the user cannot use that voice model until the file is replaced. | 5 | 4 | 3 | **60** | Structured error logging. Exception caught and re-raised as `GbeduError` via error handler. | Validate RVC model files at upload time (checksum + format check). Store per-voice-model health status in DB (`voice_models.last_error`, `voice_models.error_count`). Auto-disable voice models with > 3 consecutive failures and notify the user. |
-| F-14 | ML service (gbedu-ml) | Nigerian Pidgin / Yoruba LLM hallucination in `AfrobeatsPromptEngine.build_music_prompt()` | Lyrics or prompt generated for a Nigerian Pidgin or Yoruba-language request contains culturally inappropriate content, wrong language tokens, or nonsense text that degrades generation quality. Not a system failure, but a quality defect that affects brand reputation. If the hallucinated content violates content policy, it could result in track moderation removal or user reports. | 6 | 5 | 8 | **240** | `AfrobeatsPromptEngine` builds music prompts — assumed to have language-specific templates. | (1) Run automated evaluation on a held-out set of Yoruba/Pidgin prompts weekly; threshold on BLEU/chrF against reference translations. (2) Add content safety filter (LLM-based classifier) on generated prompts before passing to music model. (3) Human-in-the-loop review queue for first-generation from any user choosing a language other than English. Alert threshold: > 5% of Yoruba/Pidgin generations flagged by safety filter in a 24h window. |
-| F-15 | Frontend (gbedu-web) | Next.js 14 hydration failure (server-rendered HTML diverges from client JS, e.g., timestamp formatting, random IDs, locale mismatch) | React throws hydration error in browser console. Component subtree re-renders from scratch on client, causing flash of unstyled content (FOUC). Generation status polling via `useEffect` may be delayed by the re-render. In worst case, if the hydration error is in the payment flow, the Stripe Elements iframe may not mount correctly, blocking payment submission. | 5 | 4 | 5 | **100** | Next.js 14 App Router with server components reduces hydration surface. Structured error boundaries (`error.tsx`) per route segment. | Audit all client components for non-deterministic rendering (dates formatted with `Date.toLocaleString()`, `Math.random()`, `crypto.randomUUID()` without stable seeds). Add `suppressHydrationWarning` only where necessary and document the justification. Run Playwright visual diff tests on critical paths (auth, payment, generation status). |
-| F-16 | Kubernetes | Pod OOM kill (`SIGKILL`) during active payment flow (Stripe webhook processing or Paystack callback handling) | In-flight payment webhook HTTP handler is interrupted. The payment provider's server receives no 2xx response and retries the webhook. If idempotency is not implemented (see F-08), the retry processes the payment again. If idempotency is implemented, the retry is a no-op but the user may see a delayed subscription activation. | 8 | 3 | 4 | **96** | HPA scales pods based on CPU/memory. PDB prevents all pods from being evicted simultaneously. K8s `terminationGracePeriodSeconds` allows in-flight requests to complete. | Set `resources.requests.memory` and `resources.limits.memory` accurately on the `api` deployment (profile memory usage under load). Add `preStop` lifecycle hook with a short sleep (`sleep 5`) to allow load balancer to drain connections before SIGTERM. This is particularly important during rolling deployments. |
-| F-17 | API (gbedu-api) | Rate limiter false positive: SlowAPI (Redis-backed) incorrectly blocks legitimate users | User receives HTTP 429 `Too Many Requests` despite being within their actual usage quota. Causes: Redis key TTL miscalculation, SlowAPI bug, clock skew between API pods, or aggressive limit configuration. Particularly damaging if it blocks payment submission or generation submission. | 6 | 3 | 5 | **90** | SlowAPI middleware with `_rate_limit_exceeded_handler`. Redis-backed state (`set_redis(redis)` in lifespan). | Log every 429 response with user ID, path, and current Redis key TTL. Expose `rate_limit_hit_total{path="..."}` metric. Review and document rate limits per endpoint in `docs/API.md`. Implement rate limit bypass for internal service-to-service calls (e.g., Celery callbacks). Add `RateLimit-Remaining` and `RateLimit-Reset` headers to all responses. |
-| F-18 | PostgreSQL / asyncpg | asyncpg connection leak (session not closed due to unhandled exception escaping `async with get_async_session()` context manager) | Connections accumulate in IDLE state, consuming pool slots. Pool exhaustion (F-01) follows within minutes to hours depending on traffic. Since `pool_recycle=3600s`, leaked connections persist for up to 1 hour before recycling. `pool_pre_ping=True` only evicts dead server-side connections, not application-side idle connections. | 8 | 3 | 6 | **144** | `async with get_async_session() as session:` in `_run_pipeline()` ensures session closed on normal exit and on exceptions. FastAPI `get_db` dependency uses `yield` with try/finally. | Add Prometheus gauge tracking `db_pool_checkedout` (current checked-out connections), `db_pool_overflow` (overflow count), `db_pool_size`. Alert on `db_pool_checkedout > 35` (58% of hard cap). Periodically audit with `SELECT count(*), state FROM pg_stat_activity GROUP BY state` in a cron job that logs results. |
-| F-19 | Celery worker | Task deserialization failure: malformed JSON payload in Celery message (e.g., `job_id` is None, missing field, type mismatch) | Celery raises `kombu.exceptions.DecodeError` or the task's `assert job_id, "job_id must not be empty"` assertion fails at line 51 of `generation.py`. This falls through to the bare `except Exception` branch, logs the error, and re-raises. Task is marked `FAILURE` without retry (assertion errors are not in `_RETRYABLE_EXCEPTIONS`). Message moves to dead-letter queue (if configured) or is dropped. The associated generation job in DB remains in `PENDING` state permanently. | 6 | 2 | 4 | **48** | `accept_content=["json"]` rejects non-JSON messages. `task_serializer="json"` enforces serialization. Assertion at task entry. | Add a `mark_job_failed()` call in the non-retryable `except Exception` branch in `generation.py` to transition the DB generation record from `PENDING` to `FAILED` with an error message. Currently the task fails but the DB record is never updated, leaving jobs permanently stuck in `PENDING`. |
-| F-20 | Redis / API | Cache stampede on cold start: Redis restarts with empty cache, all API pods simultaneously hit PostgreSQL for the same cached queries (e.g., marketplace listings, featured tracks) | PostgreSQL receives N × (number of API pods) simultaneous queries for the same data. With HPA at 5 pods and 10 concurrent requests each, this is 50 simultaneous queries for `SELECT * FROM tracks WHERE featured = true`. Can cause DB CPU spike, pool exhaustion (F-01), and cascading slow responses across all endpoints. | 7 | 4 | 5 | **140** | `pool_pre_ping=True` handles reconnection. Structured logging on cache miss. | Implement probabilistic early expiry (PER algorithm) to prevent synchronized expiry. Add a distributed lock (Redis `SET NX PX`) per cache key: first waiter fetches from DB, others wait for the lock to release, then read from cache. Consider warming the cache via a startup script that pre-populates high-traffic keys after Redis restart. |
+This FMEA covers six component domains of the Gbẹdu platform: the FastAPI API service (gbedu-api, :8000), the FastAPI ML inference service (gbedu-ml, :8001), the Celery worker (gbedu-worker), PostgreSQL 16, the shared infrastructure layer (Cloudflare R2, Kubernetes, Redis, Prometheus), and cross-cutting security failure modes.
+
+**51 failure modes** are documented below. Of these:
+
+- **CRITICAL (RPN > 50)**: 19 items requiring immediate action before production launch.
+- **HIGH (RPN 26–50)**: 14 items requiring mitigation within the first quarter of production operation.
+- **MODERATE/LOW (RPN ≤ 25)**: 18 items accepted as residual risk with monitoring in place.
+
+**Reliability target**: 99.9% API availability = **8.76 hours of allowable downtime per year**. The generation pipeline specifically targets 99.5% per-request success rate, acknowledging the inherent instability of GPU inference workloads.
+
+**Key findings**:
+
+1. Redis is a single point of failure for both the Celery broker (task queue) and SlowAPI rate limiting. Any Redis outage cascades to generation unavailability. Redis Sentinel or Cluster is required before production launch.
+2. The ML service has no per-request VRAM budget enforcement. A single `duration_seconds=300` request can exhaust GPU memory and crash inference for all concurrent users.
+3. JWT secret rotation has no zero-downtime procedure. Rotating `JWT_SECRET_KEY` invalidates all active sessions simultaneously. RS256 with a JWKS rotation procedure must be documented.
+4. The DLQ has no automated consumer. Dead tasks accumulate silently in `gbedu.dlq` unless Grafana alerting fires. Manual remediation is undocumented.
+5. Credit decrement on generation submission is not serialized. Concurrent requests can race past the credits check and double-spend.
 
 ---
 
-## 3. Fault Tree Analysis
+## Reliability Targets
 
-Top-level failure event: **User submits a generation request and the track never arrives.**
-
-```
-[TOP] Track never arrives after generation submission
-│
-├─── [OR] Job never reaches the Celery queue
-│         │
-│         ├─── Redis broker (db 1) unreachable at submission time [F-02]
-│         │         Celery producer in generations router cannot connect.
-│         │         Task publish raises ConnectionError.
-│         │         API returns 500 or 503 to client.
-│         │
-│         ├─── Celery task serialization failure
-│         │         `job_id` not JSON-serializable (shouldn't happen — it's a str,
-│         │         but a future refactor could introduce a UUID type).
-│         │         `kombu.exceptions.EncodeError` raised at publish time.
-│         │
-│         └─── Rate limiter blocks generation submission endpoint [F-17]
-│                   SlowAPI returns 429 before task is enqueued.
-│                   Client must retry; if rate window is long, user gives up.
-│
-├─── [OR] Job is queued but no worker picks it up
-│         │
-│         ├─── All Celery workers are down (OOM kills, deployment rollout, crash loop)
-│         │         Messages accumulate in `default` queue in Redis.
-│         │         `worker_prefetch_multiplier=1` means no over-fetching,
-│         │         but no consumer exists to drain the queue.
-│         │
-│         ├─── Worker is running but `default` queue is not being consumed
-│         │         Misconfigured `queue` routing (task declares `queue="default"`,
-│         │         worker started with `-Q high_priority` only).
-│         │
-│         └─── Task visibility_timeout exceeded before ack
-│                   If task runs longer than `BROKER_TRANSPORT_OPTIONS.visibility_timeout`
-│                   (default: 3600s for Redis transport), Celery re-delivers the message
-│                   to another worker while the first is still running.
-│                   With `acks_late=True`, the first worker acks on completion,
-│                   but the second worker also picks up the message — double execution.
-│
-├─── [OR] Job is picked up but fails in the ML inference stage
-│         │
-│         ├─── ACE-Step circuit breaker open [F-06]
-│         │         `model.circuit_open` is True. Model skipped.
-│         │
-│         ├─── ACE-Step OOM on GPU [F-04]
-│         │         `torch.cuda.OutOfMemoryError` caught, model skipped.
-│         │         Falls through to Stable Audio 3.0.
-│         │
-│         ├─── All three models fail / circuit open [F-05]
-│         │         `GenerationError` raised from `MusicGenerator.generate()`.
-│         │         Celery receives `MLServiceError` (wrapped by ml_client).
-│         │         Retried 3× with 30s, 90s, 270s backoff.
-│         │         After 3 retries: DLQ. Job is permanently FAILED.
-│         │
-│         └─── ML service pod OOM killed during inference
-│                   `gbedu-ml` pod receives SIGKILL.
-│                   HTTP connection from `ml_client` times out after `inference_timeout=300s`.
-│                   `TimeoutError` classified as retryable — task retries.
-│
-├─── [OR] ML inference succeeds but job fails in DSP/upload stage
-│         │
-│         ├─── DSP pipeline OOM (librosa/demucs) [F-12]
-│         │         Worker process killed. `reject_on_worker_lost=True` requeues.
-│         │         Audio file on local disk may be corrupt or missing.
-│         │         Retry re-runs from ML inference (no stage checkpointing [F-03]).
-│         │
-│         ├─── R2 upload failure [F-07]
-│         │         `UploadError` raised. 3 retries with backoff.
-│         │         If worker pod evicted between retries, local audio file gone.
-│         │         Retry fails with FileNotFoundError (not retryable) → DLQ.
-│         │
-│         └─── R2 credentials expired / rotated
-│                   `StorageClient` raises auth error (403 from R2).
-│                   Not classified as retryable (not `UploadError`).
-│                   Task marked FAILURE immediately, no retry.
-│
-├─── [OR] Pipeline completes but DB write fails
-│         │
-│         ├─── DB connection pool exhausted at commit time [F-01]
-│         │         `async with get_async_session()` waits for pool slot.
-│         │         Times out → `TimeoutError` → task retried.
-│         │
-│         ├─── asyncpg connection leak causes pool exhaustion [F-18]
-│         │         Indirect cause; same outcome as above.
-│         │
-│         └─── Alembic migration left schema in partial state [F-11]
-│                   `INSERT INTO generations` fails with `UndefinedColumn`
-│                   if a migration added a NOT NULL column without a default.
-│                   Task marked FAILURE. All generation DB writes fail until
-│                   manual schema fix.
-│
-└─── [OR] Pipeline completes and DB write succeeds, but frontend never shows completion
-          │
-          ├─── Frontend polling WebSocket / SSE connection dropped
-          │         Next.js client poll interval may be too infrequent.
-          │         If generation completes between polls and the job status
-          │         is not persisted accessibly, client never sees completion.
-          │
-          ├─── Next.js hydration failure blocks status component render [F-15]
-          │         React hydration error causes component subtree unmount.
-          │         Generation status widget not rendered; user sees loading state.
-          │
-          └─── Redis cache returns stale PENDING status after job completes [F-20]
-                    If generation status is cached in Redis db 0 with a TTL
-                    longer than the generation duration, the cache returns
-                    `status=PENDING` even after the DB has `status=COMPLETED`.
-                    User must wait for cache TTL expiry or hard-refresh.
-```
+| Metric | Target | Allowable downtime / error budget (per year) |
+|--------|--------|----------------------------------------------|
+| API availability (all endpoints) | 99.9% | 8h 46m |
+| Generation success rate (submitted → completed) | 99.5% | — |
+| Audio delivery (CDN / R2) | 99.95% | 4h 23m |
+| P99 API response time (non-generation) | < 500 ms | — |
+| Generation end-to-end latency P50 | < 180 s | — |
+| Recovery Point Objective (RPO) | 1 hour | pgBackRest PITR |
+| Recovery Time Objective (RTO) | 30 minutes | — |
 
 ---
 
-## 4. Graceful Degradation Matrix
+## Scoring Scale
 
-| Feature | Primary Dependency | Degraded State | User-Visible Impact | Auto-Recovery? |
-|---------|-------------------|----------------|---------------------|----------------|
-| **Song generation** | ACE-Step 1.5 (primary ML model) | Falls back to Stable Audio 3.0, then YuE via `MusicGenerator` fallback chain | Lower audio quality; Afrobeats-specific tuning less precise on fallback models. No user-visible error unless all three fail. | Yes — circuit breaker recovery at `circuit_recovery_timeout=60s` |
-| **Song generation** | Celery worker pool | New generations queue in Redis; existing jobs in-flight continue if broker is up | Generation submission succeeds (HTTP 202), but completion may be delayed indefinitely. Frontend shows "Processing..." with no ETA. | Yes — when workers restart they drain the queue. Messages preserved in Redis. |
-| **Song generation** | PostgreSQL | DB writes fail; ML inference may succeed but results cannot be persisted | Generations appear to process but never appear in user history. Audio files may be uploaded to R2 orphaned. | No — requires manual DB recovery. |
-| **Voice models** | RVC v2 (voice conversion) | Generation completes without voice conversion; base Afrobeats audio is returned | User's custom voice is not applied to the track. Track is still listenable but lacks the requested voice characteristic. | Partial — per-model error tracking; auto-disable after 3 failures (recommended, F-13). |
-| **Marketplace** | PostgreSQL + Redis cache | Cache miss forces direct DB reads; high DB load may slow marketplace listings | Marketplace browsing slows down (p95 latency degrades). No functional loss. | Yes — once DB load normalizes, cache repopulates. Cold-start stampede risk (F-20). |
-| **Marketplace** | Cloudflare R2 (audio playback) | Track metadata renders but audio URLs return 4xx/5xx from R2 | Users can browse marketplace but cannot preview or download tracks. Revenue impact for sales. | Yes — R2 outages are typically < 30 minutes. No local fallback. |
-| **Payments (Stripe)** | Stripe API + webhook | Webhook delivery failure; payment intent not confirmed | User's payment is charged by Stripe but subscription is not activated in Gbẹdu DB. Requires manual reconciliation or Stripe dashboard re-delivery. | Partial — Stripe retries webhooks for 72 hours. Idempotency table (recommended, F-08) makes retry safe. |
-| **Payments (Paystack)** | Paystack API + webhook | HMAC validation failure drops event | Nigerian users' payments not recorded; subscription not activated. Silent failure. | No — Paystack has no built-in retry dashboard equivalent to Stripe. Requires manual reconciliation against Paystack transaction API. |
-| **User auth** | Redis (JWT revocation list, if implemented) | Revoked tokens may remain valid until expiry (`ACCESS_TOKEN_EXPIRE_MINUTES=30`) | Logged-out users or compromised accounts can still make API requests for up to 30 minutes. Short TTL limits blast radius. | Yes — tokens expire naturally at 30 minutes. |
-| **User auth** | PostgreSQL (user lookup) | Login, registration, and token refresh all fail | All authenticated endpoints return 401. Unauthenticated public endpoints (health check, public marketplace browse) still function. | No — requires DB recovery. |
-| **Track playback** | Cloudflare R2 | Pre-signed URLs or public CDN URLs return errors | Users cannot stream or download their own tracks. Library page loads but play buttons fail. | Yes — R2 recovers; existing URLs remain valid for their signed TTL. |
-| **Track playback** | Next.js frontend (CDN edge) | Static assets unavailable; page does not load | Total frontend outage for web users. Mobile app (if exists) unaffected. | Yes — Cloudflare CDN typically auto-recovers; re-deploy from CI if origin is down. |
+| Score | Severity (S) | Likelihood (L) |
+|-------|--------------|----------------|
+| 1–2 | Cosmetic / no user impact | Extremely rare (< 1/year) |
+| 3–4 | Minor degradation, workaround exists | Rare (1–4/year) |
+| 5–6 | Significant feature loss, some users impacted | Occasional (monthly) |
+| 7–8 | Major feature unavailable, many users impacted | Frequent (weekly) |
+| 9–10 | Full outage or data loss | Near-certain (daily) |
+
+**RPN = Severity × Likelihood**. Items with RPN > 50 are flagged **CRITICAL**.
 
 ---
 
-## 5. Monitoring and Alert Thresholds
+## FMEA Table
 
-All metrics are assumed to be scraped by Prometheus and visualized in Grafana. Alerts route to PagerDuty (critical) or Slack `#alerts-platform` (warning).
+### Section 1 — API Service (gbedu-api, :8000)
 
-### Generation Pipeline
-
-| Metric | Expression | Warning Threshold | Critical Threshold | Action |
-|--------|------------|-------------------|-------------------|--------|
-| Generation failure rate | `rate(generation_job_failed_total[5m]) / rate(generation_job_total[5m])` | > 2% | > 5% → PagerDuty | Check DLQ depth, ML circuit breaker states, worker logs |
-| DLQ depth | `celery_queue_length{queue="gbedu.dlq"}` | > 5 | > 20 → PagerDuty | Investigate root cause in DLQ messages; notify affected users |
-| Generation p95 completion time | `histogram_quantile(0.95, rate(generation_duration_seconds_bucket[10m]))` | > 3min | > 5min → PagerDuty | Scale worker pods; check GPU memory; check ML service latency |
-| Celery queue depth | `celery_queue_length{queue="default"}` | > 50 | > 200 → PagerDuty | Scale worker pods via HPA or manual override |
-
-### Database
-
-| Metric | Expression | Warning Threshold | Critical Threshold | Action |
-|--------|------------|-------------------|-------------------|--------|
-| DB pool checked out | `db_pool_checkedout` | > 35 (58% of cap=60) | > 50 (83% of cap) | Profile slow queries; consider adding read replica |
-| DB pool overflow | `db_pool_overflow` | > 10 | > 30 | Pool exhaustion imminent; scale API pods down or add PgBouncer |
-| DB connection errors | `rate(db_connection_error_total[5m])` | > 0.1/s | > 1/s → PagerDuty | Check PostgreSQL availability and max_connections |
-| Migration version drift | `gbedu_migration_version != expected_version` | — | Any drift → PagerDuty | Run `alembic current` and compare; apply missing migrations |
-
-### Redis
-
-| Metric | Expression | Warning Threshold | Critical Threshold | Action |
-|--------|------------|-------------------|-------------------|--------|
-| Redis connected clients | `redis_connected_clients` | > 100 | > 200 → PagerDuty | Check for connection leaks; profile client connection pools |
-| Redis memory usage | `redis_memory_used_bytes / redis_memory_max_bytes` | > 0.75 | > 0.90 → PagerDuty | Evict stale keys; increase memory limit; check for stampede |
-| Redis broker reachable | `up{job="redis"}` | — | == 0 → PagerDuty | Redis is broker; all task enqueuing fails immediately |
-
-### ML Service
-
-| Metric | Expression | Warning Threshold | Critical Threshold | Action |
-|--------|------------|-------------------|-------------------|--------|
-| Circuit breaker open | `ml_circuit_open{model="ace_step"}` | == 1 for > 2min | — (Slack #alerts-ml) | Check ML service logs; inspect GPU memory and error pattern |
-| All circuits open | `sum(ml_circuit_open) >= 2` | — | >= 2 → PagerDuty | All generations failing; ML service likely down or OOM |
-| GPU memory utilization | `ml_gpu_memory_used_bytes / ml_gpu_memory_total_bytes` | > 0.80 | > 0.92 → PagerDuty | Risk of OOM during next large request; drain in-flight; restart pod |
-| ML service p95 latency | `histogram_quantile(0.95, rate(ml_inference_duration_seconds_bucket[5m]))` | > 60s | > 90s → PagerDuty | Inference slower than expected; check GPU utilization, model loading |
-
-### Payments
-
-| Metric | Expression | Warning Threshold | Critical Threshold | Action |
-|--------|------------|-------------------|-------------------|--------|
-| Stripe webhook HMAC failures | `rate(stripe_webhook_hmac_failure_total[5m])` | > 0 for sustained 5min | > 5/min → PagerDuty | Possible key rotation needed or replay attack in progress |
-| Paystack webhook HMAC failures | `rate(paystack_webhook_hmac_failure_total[5m])` | > 0 for sustained 5min | > 3 consecutive → PagerDuty | Check `PAYSTACK_SECRET_KEY` matches Paystack dashboard |
-| Payment processing errors | `rate(payment_processing_error_total[5m])` | > 0.01/s | > 0.1/s → PagerDuty | Revenue impacted; check Stripe/Paystack API status pages |
-
-### API / Frontend
-
-| Metric | Expression | Warning Threshold | Critical Threshold | Action |
-|--------|------------|-------------------|-------------------|--------|
-| API error rate (5xx) | `rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])` | > 1% | > 5% → PagerDuty | Check unhandled exceptions in structlog; inspect recent deploy |
-| API p99 latency | `histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))` | > 300ms | > 500ms → PagerDuty | Check DB pool, Redis latency, slow queries |
-| Rate limit hits | `rate(rate_limit_hit_total[5m])` | > 10/s on any single path | > 50/s → PagerDuty | Possible abuse; check source IPs; consider IP-level block |
-| Pod OOM kills | `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} > 0` | Any | Repeated > 3 in 10min → PagerDuty | Adjust resource limits; profile memory usage |
+| ID | Component | Failure Mode | Severity | Likelihood | RPN | Detection | Current Mitigation | Required Action |
+|----|-----------|--------------|:--------:|:----------:|:---:|-----------|--------------------|-----------------|
+| A01 | API / Database | **DB connection pool exhausted** — SQLAlchemy hard cap of 60 connections (pool_size=20 + max_overflow=40) saturated; new requests queue then raise `TimeoutError`, returning 500 | 9 | 5 | **45** | `QueuePool limit overflow` in structlog; 5xx spike; no `db_pool_checkedout` metric currently exported | `pool_pre_ping=True`; `pool_recycle=3600s`; structured exception logging | Export `db_pool_checkedout` Prometheus gauge; alert at > 35 (58% of cap); deploy PgBouncer in transaction mode to multiply effective connection headroom |
+| A02 | API / Redis | **Redis unavailable — rate limiter disabled** — SlowAPI loses its Redis-backed state; requests either pass unthrottled or return 500 depending on SlowAPI error handling mode | 8 | 4 | **32** | 5xx spike on rate-limited paths; Redis PING failure logged at startup | SlowAPI wraps Redis; connection validated in `lifespan()` | Implement in-process token bucket fallback when Redis is unreachable; alert within 30 s of Redis PING failure; never let Redis unavailability cause 500 on rate-limited endpoints |
+| A03 | API / Redis | **Redis unavailable — refresh token blacklist bypassed** — logout writes the revoked JTI to Redis; if Redis is down, revoked tokens remain accepted for the remainder of their 30-minute TTL | 7 | 4 | **28** | Mass 401s after Redis recovery; stale tokens accepted post-logout during outage window | Access token TTL 30 min bounds the exposure window | Reduce access token TTL to 5 min; document Redis-down auth behaviour explicitly in RUNBOOKS.md; add blacklist-check circuit breaker that fails closed (rejects unverifiable tokens) |
+| A04 | API / Auth | **JWT secret rotation invalidates all sessions** — rotating `JWT_SECRET_KEY` without a grace period logs out every active user simultaneously; no zero-downtime rotation procedure documented | 8 | 3 | **24** | Mass 401s; spike in `/auth/refresh` failures | `validate_production_secrets()` prevents default key in prod | Migrate to RS256 (asymmetric); implement JWKS endpoint; document two-key grace-period rotation procedure in RUNBOOKS.md |
+| A05 | API / Email | **SMTP failure — registration verification email undelivered** — user registers, verification email is never delivered; account stuck unverified; generation gated behind email verification returns 403 | 5 | 5 | **25** | Email task failure in Celery low-priority queue; no `email_delivery_success_rate` metric | Email task max_retries=3 on low-priority Celery queue | Add secondary SMTP provider fallback; expose `email_send_failed_total` metric; alert if > 5% failure rate over 5 min |
+| A06 | API / Payments | **Stripe webhook replay — double credit grant** — Stripe retries a webhook that succeeded silently; payment processed twice; user's credits or subscription activated twice | 8 | 5 | **40** | Duplicate `provider_payment_id` on INSERT raises `DatabaseIntegrityError` — caught but retry may re-attempt | `provider_payment_id` UNIQUE constraint; `PaymentWebhookError` handler exists | Implement `webhook_events(event_id PK, provider, processed_at)` idempotency table; `INSERT ON CONFLICT DO NOTHING`; return 200 immediately for already-processed events |
+| A07 | API / Payments | **Paystack HMAC not enforced when `PAYSTACK_SECRET_KEY` is empty** — if the env var is missing, HMAC comparison with an empty string passes vacuously; forged webhooks activate subscriptions | 9 | 3 | **27** | Anomalous credit grants with no corresponding Paystack transaction | `PaystackSettings` loads key from env; no explicit non-empty assertion | Add `assert settings.paystack.secret_key, "PAYSTACK_SECRET_KEY must be set"` in `validate_production_secrets()`; add forged-webhook integration test |
+| A08 | API / Memory | **OOM under burst load** — 50+ concurrent generation submissions or large response bodies exhaust the 1 Gi pod heap; Kubernetes OOMKilled; 502 from ingress during restart | 7 | 4 | **28** | Kubernetes OOMKilled event; container restart count metric | 1 Gi RAM limit in k8s spec; GZipMiddleware compresses large responses | Profile memory under load test; set `--limit-max-requests 500` on uvicorn to recycle worker processes; tune k8s memory limit to P99 + 20% headroom |
+| A09 | API / Config | **Stale config during rolling deploy** — two API pod versions coexist mid-rollout; one has new feature flags or schema expectations; responses are inconsistent | 5 | 6 | **30** | Intermittent 422 / 500 errors during deploys; `X-App-Version` header drift | `get_settings()` is `@lru_cache` — immutable per process | Add `X-App-Version` response header; Grafana alert if multiple distinct versions serve traffic simultaneously during a rollout window |
+| A10 | API / Credits | **Credits race condition — double spend** — two concurrent generation requests both read `credits >= 1`, both pass, both decrement; user generates more tracks than their credit balance | 8 | 4 | **32** | Users report unexpected credit loss; credits can go negative | No serialization observed on credit decrement | Use atomic `UPDATE users SET credits = credits - 1 WHERE id = $1 AND credits > 0 RETURNING credits`; if no row returned, abort with `INSUFFICIENT_CREDITS`; add integration test for concurrent requests |
 
 ---
 
-## 6. Recommended Infrastructure Improvements (Prioritized by RPN)
+### Section 2 — ML Service (gbedu-ml, :8001)
 
-Items are sorted by RPN descending. All five represent systemic gaps, not minor polish.
-
----
-
-### Priority 1 — Nigerian Pidgin / Yoruba LLM Hallucination (F-14, RPN: 240)
-
-**Problem:** The `AfrobeatsPromptEngine.build_music_prompt()` generates prompts for West African languages with no automated quality gate. Hallucinated or culturally inappropriate content damages brand trust, could violate content policies, and degrades generation quality for a core user segment (Nigerian and West African users are the primary market).
-
-**Remediation steps:**
-
-1. Build a prompt evaluation harness: a dataset of 50 reference Yoruba, Nigerian Pidgin, Igbo, and Hausa prompts with expected musical descriptors. Run weekly; track BLEU/chrF score drift.
-2. Implement a lightweight content safety classifier (distilbert fine-tuned on Afrobeats-domain content) that runs on every generated prompt before it enters `MusicGenerator.generate()`. Route flagged prompts to a human review queue.
-3. Add `ml_prompt_safety_flag_total{language="..."}` Prometheus counter. Alert if > 5% of any language's prompts are flagged in a 24-hour window.
-4. For languages with < 100 reference prompts in the eval set, default to English-language music descriptors with language metadata appended, rather than generating full non-English prompts until the model is validated.
-
-**Estimated effort:** 2 weeks (1 week eval harness, 1 week classifier + monitoring).
+| ID | Component | Failure Mode | Severity | Likelihood | RPN | Detection | Current Mitigation | Required Action |
+|----|-----------|--------------|:--------:|:----------:|:---:|-----------|--------------------|-----------------|
+| M01 | ML / GPU | **CUDA OOM — single large request kills inference** — a `duration_seconds=300` request allocates > available VRAM; `torch.cuda.OutOfMemoryError`; GPU memory fragmentation persists and cascades to subsequent requests | 9 | 6 | **54** ⚠️ CRITICAL | OOMKilled Kubernetes event; ML service 503; Sentry alert | Three-model fallback chain (ACE-Step → Stable Audio → YuE); `circuit_failure_threshold=5` | Enforce per-request VRAM budget: reject if `torch.cuda.memory_reserved() / total > 0.85`; add `torch.cuda.empty_cache()` after every inference; expose `ml_gpu_memory_reserved_bytes` metric; alert at > 80% |
+| M02 | ML / GPU | **GPU memory leak across requests** — PyTorch tensors not released after inference; VRAM slowly exhausted over hours; inference latency grows then OOM occurs | 7 | 5 | **35** ⚠️ | `nvidia-smi` shows monotonically increasing reserved memory; p99 inference latency trending up | Pod restarts on OOMKilled (eventual recovery) | Call `torch.cuda.empty_cache()` after each inference; add `ml_gpu_memory_reserved_bytes` Prometheus gauge sampled every 30 s; alert if reserved > 80% of total; set up nightly pod recycle as a safety net |
+| M03 | ML / Models | **Model weight corruption on disk** — partial download or disk error produces a corrupt checkpoint; `RuntimeError` on `torch.load()`; ML service fails to start | 8 | 3 | **24** | ML service crash loop; health check returns 503; Kubernetes pod restart events | HuggingFace Hub downloads with checksums | Store expected SHA-256 of every model file in `gbedu_ml/config.py`; verify at startup before loading; alert and refuse to start on mismatch |
+| M04 | ML / Models | **Model download failure on first boot** — network partition during the ~15 GB HuggingFace download; service stuck in restart loop; liveness probe eventually fails | 7 | 4 | **28** | Pod restart loop; `initialDelaySeconds=600` gives 10 min window but persistent partition exceeds it | 10-minute `initialDelaySeconds` on liveness probe; HF Hub retries | Implement download resumption via HTTP range requests; add `model_download_progress_pct{model="..."}` metric; pre-pull model weights in CI and bake into a versioned Docker image layer for production |
+| M05 | ML / Inference | **ACE-Step inference timeout — process does not respond to SIGTERM** — GPU kernel hangs; `soft_time_limit=720` fires but SIGTERM is not honoured inside a blocking CUDA call; `time_limit=780` SIGKILL eventually fires | 8 | 4 | **32** | Worker task marked FAILED after `time_limit=780`; generation DB row stuck in `processing` | `soft_time_limit=720` + `time_limit=780` on Celery task | Add a watchdog thread in the ML service that sends SIGKILL to the inference subprocess if wall-clock time exceeds budget; expose per-step `ml_inference_duration_seconds{model="..."}` histogram |
+| M06 | ML / Models | **All three model circuit breakers open simultaneously** — dependency update breaks all three model loaders in the same deploy; every generation request fails instantly | 10 | 2 | **20** | Health check reports all circuits open; generation failure rate 100%; DLQ depth grows | Per-model circuit breakers; breakers are independent | Add `/health/detailed` component `ml_service` reporting per-model circuit state; alert CRITICAL if ≥ 2 circuits open; implement admin endpoint to manually reset a specific circuit breaker |
+| M07 | ML / Models | **RVC voice model missing from R2** — voice model deleted from storage but DB record exists; worker dispatches RVC step with an invalid R2 key; `StorageError` raised | 6 | 4 | **24** | `StorageError` in worker logs; generation fails at voice conversion step | `voice_model_id` FK constraint in DB | Pre-flight check in `GenerationPipelineOrchestrator`: verify R2 key exists before dispatching RVC step; auto-disable voice models with > 3 consecutive `StorageError` failures |
+| M08 | ML / Inference | **Llama-3 8B GPU stall — lyrics generation hangs indefinitely** — long-context prompt with no `max_new_tokens` cap; autoregressive loop runs without bound; no per-step timeout in the orchestrator | 8 | 4 | **32** | Worker task hits `soft_time_limit=720`; generation marked FAILED with timeout | Worker-level `soft_time_limit` is the only backstop | Set `max_new_tokens=512` cap in every Llama-3 inference call; add per-step deadline in `GenerationPipelineOrchestrator` (e.g., 60 s for lyrics, 300 s for music); expose `ml_step_duration_seconds{step="..."}` histogram |
+| M09 | ML / Audio | **ACE-Step produces silent audio** — model generates a valid WAV with zero amplitude; audio mastering normalises silence to a valid-looking file; user hears nothing | 6 | 3 | **18** | User complaint; play count anomaly; audio analysis step measures loudness | Audio analysis step (`gbedu_audio/analysis.py`) measures loudness | Add `assert peak_db > -60` quality gate in `gbedu_audio/analysis.py` before upload; fail generation with `GENERATION_QUALITY_FAILED` error code; surface this to the user as a retryable error |
+| M10 | ML / LoRA | **LoRA weight hot-swap corrupts active inference** — new LoRA weights loaded while an in-flight inference request reads the same model weights; output quality degrades or model crashes | 7 | 3 | **21** | Corrupt or zero-length audio output; non-deterministic errors on the hot-swap pod | Hot-swap described as a capability; no locking mechanism confirmed | Implement a `threading.RLock` (or `asyncio.Lock`) around the model adapter; reject new inference requests during the swap window (< 5 s); log every swap event with model version |
 
 ---
 
-### Priority 2 — JWT Secret Compromise Risk (F-10, RPN: 160)
+### Section 3 — Worker / Celery
 
-**Problem:** The current HS256 symmetric signing scheme means anyone with the `JWT_SECRET_KEY` can forge tokens for any user. The default value `"change-this-in-production"` is hardcoded in `JWTSettings` and will silently pass if the env var is not set in a new deployment. There is no token revocation mechanism.
-
-**Remediation steps:**
-
-1. **Immediate:** Add a startup assertion in `lifespan()` in `main.py`:
-   ```python
-   if settings.jwt.secret_key == "change-this-in-production":
-       raise RuntimeError("JWT_SECRET_KEY is not set — refusing to start in non-development mode")
-   ```
-   Gate this on `not settings.is_development`.
-
-2. **Short-term:** Migrate to RS256. Generate a 4096-bit RSA key pair. Store the private key in Kubernetes Secrets. Distribute the public key via a JWKS endpoint (`GET /api/v1/.well-known/jwks.json`). This allows the public key to be exposed without enabling token forgery.
-
-3. **Short-term:** Implement JWT revocation: add a `jti` UUID claim to every issued token. On logout, `SETEX jti:<jti> <remaining_ttl> 1` in Redis. On every authenticated request, check `EXISTS jti:<jti>` before accepting the token.
-
-4. **Medium-term:** Add CI secret scanning (e.g., `gitleaks` in the GitHub Actions workflow) to prevent accidental commits of JWT or payment secrets.
-
-**Estimated effort:** 3 days (RS256 migration is straightforward with PyJWT; JWKS endpoint is ~50 lines).
+| ID | Component | Failure Mode | Severity | Likelihood | RPN | Detection | Current Mitigation | Required Action |
+|----|-----------|--------------|:--------:|:----------:|:---:|-----------|--------------------|-----------------|
+| W01 | Worker / Tasks | **Task duplication — generation run twice** — network partition between Redis broker and worker causes a late ack; Celery delivers the task a second time while the first execution is still running | 7 | 4 | **28** | Two concurrent DB updates for the same `job_id`; pipeline state machine detects duplicate | `acks_late=True`; `reject_on_worker_lost=True`; `GenerationPipelineOrchestrator` checks DB state at each step entry | Add idempotency integration test: invoke `_run_pipeline(job_id)` twice concurrently; verify second call is a no-op at each stage |
+| W02 | Worker / Tasks | **Worker crash mid-generation — no pipeline checkpointing** — OOMKilled or SIGKILL during audio mastering; task requeued; retry restarts from ML inference, not from the DSP checkpoint; user waits up to 2× the normal generation time | 7 | 5 | **35** ⚠️ | Task redelivered to queue; generation takes > 2× expected; structlog shows retry with same `job_id` | `reject_on_worker_lost=True` requeues; max_retries=3 with backoff 30/90/270 s | Implement stage checkpointing: persist completed stage IDs (e.g., `LYRICS_DONE`, `MUSIC_DONE`, `DSP_DONE`) to Redis with 24h TTL; `GenerationPipelineOrchestrator.run()` resumes from last completed stage on retry |
+| W03 | Worker / Broker | **Redis broker lost — all tasks undeliverable** — Redis pod crash or network partition; Celery cannot publish or consume tasks; all in-flight and queued generations stall | 9 | 4 | **36** ⚠️ | All generations stall in `processing`; `celery_queue_length` drops to zero AND no tasks complete; Redis PING failures | Celery retries broker connection with exponential backoff | Deploy Redis Sentinel (3 nodes) before production; add broker health check to `/api/v1/health/detailed`; alert within 60 s of broker unavailability |
+| W04 | Worker / DLQ | **DLQ overflow — dead tasks accumulate silently** — `gbedu.dlq` queue grows unbounded; no automated consumer removes messages; affected users never notified | 6 | 5 | **30** | `celery_queue_length{queue="gbedu.dlq"}` gauge grows; no user-visible error | `process_dlq_message` task exists with max_retries=0 | Alert: DLQ depth > 10 → Slack; > 50 → PagerDuty; add DLQ depth to the `/health/detailed` response; document manual DLQ remediation in RUNBOOKS.md |
+| W05 | Worker / Serialization | **Task deserialization failure — Pydantic model passed as arg** — caller passes a non-JSON-serializable object (UUID, Pydantic model); Celery raises `kombu.exceptions.EncodeError` at dispatch; task never enqueued; generation DB record stuck in `PENDING` | 6 | 3 | **18** | `EncodeError` in API structlog at task dispatch; generation job permanently in `PENDING` state | `task_serializer="json"`, `accept_content=["json"]`; task arg documented as str | Add `_mark_job_failed()` call in the non-retryable `except Exception` branch in `generation.py` so DB record transitions `PENDING → FAILED`; add CI test calling `.apply_async()` with production arg types |
+| W06 | Worker / Beat | **Beat scheduler single point of failure** — single `celery beat` process; crash means `reset_daily_generation_counts` does not run; users cannot generate after midnight until manually restarted | 6 | 4 | **24** | Daily generation limits not reset; users hit quota permanently; no beat heartbeat metric | Kubernetes Deployment for beat with `replicas: 1` | Deploy `celery-redbeat` (Redis-backed distributed beat scheduler) to guarantee exactly-once schedule execution across pod restarts; add beat heartbeat metric and alert if missing for > 5 min |
+| W07 | Worker / Tasks | **Zombie tasks — blocking subprocess holds GIL** — ffmpeg or librosa subprocess called with a blocking API inside the Celery task; SIGTERM from `soft_time_limit` cannot interrupt a GIL-holding C extension; `time_limit` SIGKILL eventually fires | 7 | 4 | **28** | Task duration exceeds `soft_time_limit`; `SoftTimeLimitExceeded` not raised until next Python bytecode checkpoint | `soft_time_limit=720` / `time_limit=780` | Wrap all subprocess calls in `asyncio.create_subprocess_exec` with `asyncio.wait_for`; use `run_in_executor` for blocking C-extension calls; test that `soft_time_limit` fires correctly |
+| W08 | Worker / Tasks | **R2 upload timeout mid-multipart — audio file lost** — `boto3` upload stalls; `UploadError` raised; task retried; but the temp audio file is on ephemeral pod disk and may be deleted by the hourly cleanup task before the retry runs | 8 | 3 | **24** | `StorageUploadError` in worker logs; generation FAILED after retries | Tenacity retry (3×) on `UploadError`; `UploadError` is retryable | Persist generated audio to a shared volume or S3-compatible staging bucket before attempting R2 upload; extend temp file cleanup TTL to at minimum 2 h; add multipart upload resumption via S3 upload ID |
+| W09 | Worker / Ordering | **Message ordering violation — postprocess before generate completes** — Celery does not guarantee FIFO within a queue under retry; a postprocess task could execute before the parent generate task commits to DB | 5 | 3 | **15** | State machine violation logged; postprocess step finds no audio path in DB | Pipeline stages chained via Celery chord/chain | Enforce: postprocess tasks are always dispatched within the same chain as generate; add DB state assertion (`assert job.status == JobStatus.ml_done`) at postprocess entry |
+| W10 | Worker / Notifications | **Notification task failure silently swallowed** — email notification task fails after max_retries; user never notified that generation completed; no fallback delivery path | 4 | 5 | **20** | `task_failure` signal fires for notification task; no user-visible symptom | Email task retried 3× on low-priority queue | Add fallback: on DLQ for notification tasks, write an unread notification row to a `notifications` DB table; frontend polls `GET /api/v1/notifications` |
 
 ---
 
-### Priority 3 — Stripe Webhook Duplicate Processing (F-08, RPN: 160)
+### Section 4 — Database (PostgreSQL 16)
 
-**Problem:** No idempotency table exists for Stripe (or Paystack) webhooks. Stripe guarantees at-least-once delivery, not exactly-once. Network blips during webhook processing result in the handler not returning 2xx, triggering Stripe's retry mechanism. Each retry risks double-granting credits, double-sending emails, or double-activating subscriptions.
-
-**Remediation steps:**
-
-1. Create a `webhook_events` table:
-   ```sql
-   CREATE TABLE webhook_events (
-       event_id   TEXT        PRIMARY KEY,
-       provider   TEXT        NOT NULL,  -- 'stripe' | 'paystack'
-       processed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-       status     TEXT        NOT NULL   -- 'processed' | 'skipped'
-   );
-   CREATE INDEX ON webhook_events (processed_at);
-   ```
-
-2. In the Stripe webhook handler, wrap processing in:
-   ```python
-   result = await db.execute(
-       insert(WebhookEvent).values(event_id=event.id, provider="stripe", status="processed")
-       .on_conflict_do_update(index_elements=["event_id"], set_={"status": "skipped"})
-       .returning(WebhookEvent.status)
-   )
-   if result.scalar() == "skipped":
-       return JSONResponse({"status": "already_processed"})
-   ```
-
-3. Implement the same pattern for Paystack using Paystack's `data.reference` as the idempotency key.
-
-4. Purge `webhook_events` rows older than 30 days via a nightly Celery task.
-
-**Estimated effort:** 1 day.
+| ID | Component | Failure Mode | Severity | Likelihood | RPN | Detection | Current Mitigation | Required Action |
+|----|-----------|--------------|:--------:|:----------:|:---:|-----------|--------------------|-----------------|
+| D01 | Database | **Connection pool exhaustion from worker** — worker opens a DB session at task start and holds it open across the ML HTTP call (up to 300 s); pool slots exhausted; API requests queue and timeout | 8 | 5 | **40** | `QueuePool limit overflow` in worker structlog | `get_async_session()` is a context manager; `pool_pre_ping=True` | Ensure `get_async_session()` context is exited before any ML HTTP call; never hold a DB session across a network boundary; add worker-specific pool metrics |
+| D02 | Database | **Long-running transaction deadlock** — two concurrent `UPDATE tracks` or `UPDATE users` requests acquire row locks in different order; PostgreSQL deadlock detector aborts one; request returns 500 | 5 | 4 | **20** | `DeadlockDetected` PostgreSQL error in structlog; occasional 500 on update paths | SQLAlchemy raises `OperationalError`; unhandled exception handler returns 500 | Add retry-on-deadlock decorator to service layer functions; use `SELECT ... FOR UPDATE SKIP LOCKED` for non-blocking patterns; add `deadlock_total` metric |
+| D03 | Database | **Migration failure on live traffic — ACCESS EXCLUSIVE lock** — `alembic upgrade head` acquires `ACCESS EXCLUSIVE` on the target table; all queries blocked; 504 cascade across API and worker | 9 | 4 | **36** ⚠️ | All API requests timeout; 504 from ingress; no mitigation for currently running migrations | Runbook mandates low-traffic window; two-phase column removal documented | Enforce `CREATE INDEX CONCURRENTLY` for all index additions (requires separate migration file, no transaction wrapper); mandate nullable-first column additions; add pre-migration traffic drain to deploy workflow; run migration as a pre-upgrade Kubernetes Job with timeout |
+| D04 | Database | **Disk full — all writes fail** — PostgreSQL data volume fills; all INSERT/UPDATE fail with `ENOSPC`; service degrades to read-only then total failure | 10 | 3 | **30** | `disk_used_percent` Prometheus metric > 85%; PostgreSQL error logs show `ENOSPC` | pgBackRest PITR on vmi3169165; managed instance | Alert at 75% disk usage; implement partitioning + archival: audio analysis tables > 90 days → archive to R2; add `pg_partman` for large tables |
+| D05 | Database | **Soft-delete filter missing on a new query** — a new query added without `WHERE deleted_at IS NULL` returns soft-deleted tracks, users, or voice models to callers | 7 | 4 | **28** | Users see deleted content; privacy violation potential | Soft-delete pattern documented in ARCHITECTURE.md | Add SQLAlchemy `__mapper_args__` with a default `where_clause` enforcing `deleted_at IS NULL` on all models; or use a custom `Query` subclass; add a unit test asserting soft-deleted rows are invisible |
+| D06 | Database | **Credits race condition — double spend** — two concurrent generation requests read `credits >= 1` before either commits the decrement; both pass; user generates two tracks with one credit | 8 | 4 | **32** | Credits go negative; user generates more than their tier allows | No serialization observed on credit reads | Atomic `UPDATE users SET credits = credits - 1 WHERE id = $1 AND credits > 0 RETURNING credits`; abort if no row returned; this is the same root cause as A10 — fix must be in the DB layer |
+| D07 | Database | **Replication lag — stale reads on future replica** — when a read replica is added, replication lag causes stale generation status reads; user sees `PENDING` for a completed job | 5 | 2 | **10** | `pg_stat_replication.replay_lag` metric; stale status in frontend | Currently no read replica (single primary) | When replica added: route `generation status` reads to primary; use `synchronous_commit = remote_apply` for credit and payment writes |
+| D08 | Database | **pg_hba lockout after bad config deploy** — `pg_hba.conf` edited incorrectly; all connections refused; full service outage | 9 | 2 | **18** | All DB connections fail immediately; total outage | Managed PG instance on vmi3169165; config changes via admin UI | Never edit `pg_hba.conf` directly; add pre-deploy connectivity smoke test: `psql -c "SELECT 1"` before traffic switchover |
+| D09 | Database | **asyncpg connection leak — unhandled exception escapes context manager** — an exception propagates before the `async with get_async_session()` `__aexit__` runs; connection left in IDLE state; pool slots exhausted over hours | 8 | 3 | **24** | `db_pool_checkedout` gauge climbs monotonically; no `db_pool_checkin` events | `async with get_async_session() as session:` should handle this; FastAPI `get_db` uses `yield` with try/finally | Add SQLAlchemy pool event listeners to export `db_pool_checkedout` and `db_pool_overflow` Prometheus gauges; alert at > 35 checked out (58% of hard cap 60) |
 
 ---
 
-### Priority 4 — asyncpg Connection Leak / Pool Exhaustion (F-18, RPN: 144 / F-01, RPN: 108)
+### Section 5 — Infrastructure
 
-**Problem:** There is currently no Prometheus instrumentation on the SQLAlchemy connection pool. Connection leaks are invisible until pool exhaustion causes a wave of `TimeoutError` exceptions. The hard cap of 60 connections (pool_size=20 + max_overflow=40) can be exhausted by 3-4 API pods under moderate load if any requests hold connections for extended periods.
-
-**Remediation steps:**
-
-1. Add a SQLAlchemy event listener to export pool metrics:
-   ```python
-   from sqlalchemy import event
-   from prometheus_client import Gauge
-
-   pool_checked_out = Gauge("db_pool_checkedout", "DB connections currently in use")
-   pool_overflow = Gauge("db_pool_overflow", "DB connections in overflow")
-
-   @event.listens_for(engine.sync_engine, "checkout")
-   def on_checkout(dbapi_conn, conn_record, conn_proxy):
-       pool_checked_out.inc()
-
-   @event.listens_for(engine.sync_engine, "checkin")
-   def on_checkin(dbapi_conn, conn_record):
-       pool_checked_out.dec()
-   ```
-
-2. Alert: `db_pool_checkedout > 35` → warning; `> 50` → critical (see Section 5).
-
-3. Deploy PgBouncer in transaction pooling mode between the API pods and PostgreSQL. PgBouncer's pool can be set much larger (e.g., 100) while the actual Postgres `max_connections` stays controlled. This is the most impactful change for preventing F-01 under burst traffic.
-
-4. Audit all code paths that open a DB session for proper context manager usage. The `get_async_session()` in `gbedu_worker/db.py` is correctly wrapped; verify the FastAPI `get_db` dependency also has a try/finally `await session.close()`.
-
-**Estimated effort:** 2 days (metrics: 4 hours; PgBouncer: 1 day; audit: 4 hours).
+| ID | Component | Failure Mode | Severity | Likelihood | RPN | Detection | Current Mitigation | Required Action |
+|----|-----------|--------------|:--------:|:----------:|:---:|-----------|--------------------|-----------------|
+| I01 | Storage / R2 | **Cloudflare R2 outage** — R2 API unavailable; audio uploads fail; presigned URL generation fails; users cannot access existing tracks via CDN | 8 | 2 | **16** | `StorageUploadError`; CDN 5xx; Cloudflare status page alert | Tenacity retry (3×) on upload; LocalStack in dev | Configure Cloudflare R2 SLA webhook to alert engineering Slack; document manual recovery (no local fallback exists); add `storage_upload_failed_total` metric |
+| I02 | CDN | **CDN cache poisoning** — attacker triggers Cloudflare to cache a 403 or corrupt response for a public audio URL; legitimate users receive the cached error | 6 | 2 | **12** | Elevated 403/404 rate on CDN-served audio URLs | Cloudflare CDN with signed URLs for private content; public bucket URLs are time-unlimited | Set `Cache-Control: no-store` on all API JSON responses; use short-lived signed R2 URLs (1 h for WAV, 7 days for MP3); purge CDN cache on track deletion |
+| I03 | Kubernetes | **Pod eviction during generation** — memory pressure causes kubelet to evict the worker pod mid-generation; task requeued by `reject_on_worker_lost`; user waits extra time | 7 | 4 | **28** | OOMKilled or Evicted events in `kubectl get events`; task retry counter increments | `acks_late=True` requeues; max_retries=3 | Profile actual worker memory usage under GPU inference load; set `resources.requests.memory` to P95 measured usage; add `PodDisruptionBudget` for the worker deployment |
+| I04 | Kubernetes | **Rolling deploy mid-request — connection reset** — old API pod receives SIGTERM while handling a 120 s generation polling request; Kubernetes default `terminationGracePeriodSeconds=30` kills the pod before the response completes; client gets TCP RST | 6 | 6 | **36** ⚠️ | Client receives 502; frontend shows error toast; no data loss but UX impact | `terminationGracePeriodSeconds` defaults apply | Set `terminationGracePeriodSeconds: 120` on the API Deployment; add `preStop` lifecycle hook: `exec: command: ["sleep", "5"]` to drain load balancer connections before SIGTERM |
+| I05 | Redis | **Redis `maxmemory` eviction — rate limit keys evicted** — Redis hits its memory limit under load; LRU eviction removes rate limit counters; rate limit bypass possible | 7 | 4 | **28** | `redis_evicted_keys_total` counter increases; anomalous request volumes | Redis `maxmemory-policy` value not confirmed in reviewed config | Set `maxmemory-policy allkeys-lru`; segregate rate limit keys to a dedicated Redis DB with a `noeviction` policy; alert if `redis_evicted_keys_total` rate > 10/s |
+| I06 | Observability | **Prometheus scrape failure — metric gaps** — Prometheus cannot reach a pod during pod churn; metric gap causes false alert clearance; incidents missed | 4 | 5 | **20** | `up{job="gbedu-api"}` drops to 0 for a pod; scrape error in Prometheus targets | Prometheus scrape interval 15 s; structlog still writes to Loki | Set `scrape_timeout` < `scrape_interval`; configure Alertmanager with `for: 2m` on pod-down alerts to filter transient scrape gaps |
+| I07 | Infrastructure | **TLS certificate expiry** — Let's Encrypt cert on Traefik (vmi3169158) expires; HTTPS breaks for all services | 9 | 2 | **18** | Browser TLS errors; curl cert verify failure | Traefik automatic renewal via ACME | Add `ssl_certificate_expiry_seconds` Prometheus metric (via `blackbox_exporter`); alert at 14 days and 3 days remaining; test renewal in staging |
+| I08 | Infrastructure | **Clock skew — JWT `iat`/`exp` invalid** — NTP sync failure on API pod causes token `iat` to be in the future; every newly issued token is immediately rejected | 7 | 2 | **14** | Mass 401 errors on brand-new tokens; `JWT_EXPIRED` error code on tokens issued seconds ago | NTP configured on host nodes | Add `leeway=5` seconds to JWT validation; add clock-skew monitoring via `chrony tracking` on nodes |
+| I09 | Infrastructure | **Kubernetes control plane unavailable** — cluster API server unreachable; no new deployments or pod restarts via controller manager; existing pods continue running | 5 | 2 | **10** | `kubectl` commands fail; CI deploy fails | Managed Kubernetes on Contabo; kubelet is local and continues running existing pods | Document "control plane down" runbook; all traffic continues from running pods; escalate to Contabo support |
+| I10 | Observability | **Grafana / Alertmanager outage — silent failures** — Grafana pod down; alerts not fired; incidents go undetected | 5 | 3 | **15** | Grafana health check fails; engineers not paged | Prometheus standalone alerting rules via Alertmanager | Route all CRITICAL alerts directly through PagerDuty via Alertmanager, bypassing Grafana; never depend on Grafana for on-call alerting |
 
 ---
 
-### Priority 5 — Redis Cache Stampede on Cold Start (F-20, RPN: 140)
+### Section 6 — Security
 
-**Problem:** When Redis restarts with an empty cache (planned maintenance, OOM kill, pod restart), all API pods simultaneously receive cache misses for the same high-traffic keys (marketplace listings, featured tracks, generation status). This produces a thundering-herd DB query spike that can itself cause pool exhaustion (F-01), compounding the incident.
-
-**Remediation steps:**
-
-1. Implement a distributed lock per cache key using Redis `SET NX PX`. Pattern:
-   ```python
-   async def get_cached_or_fetch(redis, key, ttl, fetch_fn):
-       value = await redis.get(key)
-       if value:
-           return deserialize(value)
-       lock_key = f"lock:{key}"
-       acquired = await redis.set(lock_key, "1", nx=True, ex=10)
-       if acquired:
-           try:
-               value = await fetch_fn()
-               await redis.setex(key, ttl, serialize(value))
-               return value
-           finally:
-               await redis.delete(lock_key)
-       else:
-           # Another pod is fetching; brief wait then retry
-           await asyncio.sleep(0.1)
-           return await get_cached_or_fetch(redis, key, ttl, fetch_fn)
-   ```
-
-2. Add a cache warm-up Kubernetes Job that runs after Redis restarts (triggered by a Redis readiness probe state change) and pre-populates the top-N marketplace listings, featured tracks, and genre lists.
-
-3. Stagger cache TTLs with jitter: instead of `SETEX key 300`, use `SETEX key (300 + random.randint(-30, 30))` to prevent synchronized expiry.
-
-4. Monitor `redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total)` as a cache hit rate metric. Alert if hit rate drops below 60% for more than 5 minutes (strong signal of cache cold-start or key churn).
-
-**Estimated effort:** 1.5 days.
+| ID | Component | Failure Mode | Severity | Likelihood | RPN | Detection | Current Mitigation | Required Action |
+|----|-----------|--------------|:--------:|:----------:|:---:|-----------|--------------------|-----------------|
+| S01 | Auth | **JWT access token replay** — stolen access token used within its 30-minute window; attacker performs actions as victim | 8 | 4 | **32** | Anomalous requests from unexpected IP/User-Agent for same `sub`; no current per-token detection | Short TTL (30 min); HTTPS-only in production | Implement JTI claim in every token; Redis-backed revocation list checked on every request; `SETEX jti:<jti> <remaining_ttl> 1` on logout; `EXISTS jti:<jti>` on auth |
+| S02 | Auth | **Refresh token theft — indefinite account takeover** — refresh token exfiltrated from `httpOnly` cookie or local storage; attacker rotates tokens indefinitely | 9 | 4 | **36** ⚠️ | Multiple concurrent refresh sessions from different IPs; no current detection | Refresh token rotation on each use (sliding window) | Implement refresh token family detection: store a `family_id` with each token; on re-use of a superseded token, revoke all tokens in the family for that user (OWASP recommended pattern) |
+| S03 | API | **SSRF via user-supplied webhook URL** — attacker supplies `http://169.254.169.254/latest/meta-data/` or `http://10.0.0.1/` as a webhook callback; internal metadata service or cluster network accessed | 8 | 4 | **32** | Internal metadata service hit; cloud credentials exfiltrated | No SSRF protection confirmed in webhook URL handling | Validate all user-supplied URLs: reject private IP ranges (RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), link-local (169.254.0.0/16), and loopback; use `httpx` with `allow_redirects=False` |
+| S04 | API / Database | **SQL injection via raw `text()` call** — a `text()` call with string interpolation instead of bound parameters; attacker crafts payload that escapes the query | 9 | 2 | **18** | WAF alert; anomalous SQL error in structlog | SQLAlchemy ORM parameterizes all queries by default | Audit all `text()` calls for bound parameter usage; add `bandit` SAST to CI with rule B608 (SQL injection); WAF rule for SQLi patterns at Traefik layer |
+| S05 | API | **Rate limit bypass via IP rotation** — attacker rotates through a residential proxy pool; anonymous rate limit of 20 req/min per IP is ineffective | 6 | 6 | **36** ⚠️ | High volume from many IPs; generation abuse; GPU cost spike | Anonymous rate limit is per-IP; authenticated rate limits are per user | Require account creation for any generation request; add CAPTCHA on registration; implement behavioral fingerprinting (browser fingerprint, request timing analysis) at Cloudflare WAF level |
+| S06 | Storage | **Presigned URL leakage** — a 7-day presigned R2 URL shared by a user or leaked from the frontend; third party downloads tracks without authentication | 5 | 4 | **20** | Unexpected download volume from non-user-owned regions; anomalous R2 bandwidth | Presigned URLs have 7-day (MP3) and 1-day (WAV) TTL | Reduce MP3 presigned URL TTL to 1 h; log presigned URL generation with `user_id` and `track_id`; add Cloudflare R2 custom domain with WAF `Referer` check |
+| S07 | Auth | **OAuth2 CSRF — missing or weak state parameter** — Google OAuth callback does not validate the `state` nonce; CSRF attack forces a victim to link the attacker's Google account | 8 | 3 | **24** | Victim's account linked to attacker's Google ID | OAuth flow exists; state validation not confirmed in reviewed code | Audit `google_oauth_callback` to verify `state` is a CSPRNG nonce stored in the user's session cookie and validated on callback; add CSRF integration test |
+| S08 | Auth | **JWT secret compromise — default key used in staging** — staging cluster deployed with `JWT_SECRET_KEY=change-this-in-production` (the default); staging JWT tokens forged and replayed against production if the secret matches | 10 | 3 | **30** | Forged tokens accepted in production; attacker impersonates any user | `validate_production_secrets()` asserts key is not default in `ENVIRONMENT=production` | Enforce unique secrets per environment; add CI secret scanning (`gitleaks`); add `bandit` check B105 (hardcoded password) to CI |
+| S09 | Infrastructure | **Kubernetes RBAC over-permission** — service accounts with broad permissions; compromised pod pivots to cluster secrets or other namespaces | 8 | 3 | **24** | No k8s audit log anomaly detection currently configured | Kubernetes RBAC exists | Audit service account permissions; enforce least-privilege (no `cluster-admin` for application service accounts); add `Falco` for runtime threat detection; enable k8s audit policy for `get secrets` calls |
+| S10 | API | **Mass assignment via `extra="allow"` schema** — a schema accidentally configured with `extra="allow"` (or `extra="ignore"`) allows attackers to set internal fields like `subscription_tier` or `is_admin` | 6 | 2 | **12** | Privilege escalation; unexpected DB column values | All schemas reviewed use `extra="forbid"` | Add CI lint rule: `grep -r 'extra="allow"' services/ libs/` fails the build; enforce in code review checklist |
+| S11 | Infrastructure | **TLS private key exposed in environment** — TLS private key accidentally set as an environment variable or logged via structlog's `log.info("config", **settings.dict())` | 7 | 2 | **14** | Private key visible in Grafana Loki logs; man-in-the-middle possible | Kubernetes Secrets mount as files, not env vars (when correctly configured) | Audit all `log.info` calls that log settings objects; add secret scrubbing to structlog processor chain; verify TLS keys are volume-mounted, not env-var-mounted |
 
 ---
 
-## Appendix A — Failure Mode Index
+## RPN Summary — CRITICAL Items (RPN > 50), Sorted Descending
 
-| RPN | ID | Failure Mode |
-|-----|----|--------------|
-| 240 | F-14 | Nigerian Pidgin/Yoruba LLM hallucination |
-| 160 | F-08 | Stripe webhook duplicate processing |
-| 160 | F-10 | JWT secret compromise |
-| 144 | F-18 | asyncpg connection leak |
-| 140 | F-20 | Redis cache stampede |
-| 126 | F-06 | ACE-Step circuit breaker stuck open |
-| 126 | F-09 | Paystack HMAC validation failure |
-| 120 | F-04 | ML model GPU OOM |
-| 108 | F-01 | DB connection pool exhaustion |
-| 108 | F-11 | Alembic migration failure |
-| 100 | F-15 | Next.js hydration failure |
-| 96 | F-16 | Pod OOM kill during payment flow |
-| 90 | F-17 | Rate limiter false positive |
-| 84 | F-12 | DSP pipeline OOM (librosa/demucs) |
-| 63 | F-07 | R2 upload failure after generation |
-| 60 | F-13 | RVC voice conversion crash |
-| 56 | F-03 | Celery worker crash mid-generation |
-| 54 | F-02 | Redis unavailability |
-| 48 | F-19 | Celery task deserialization failure |
-| 40 | F-05 | All three ML circuits open simultaneously |
+| ID | Failure Mode | RPN | S | L |
+|----|-------------|:---:|:-:|:-:|
+| M01 | CUDA OOM kills inference | **54** | 9 | 6 |
+| W03 | Redis broker lost — all tasks undeliverable | **36** | 9 | 4 |
+| S02 | Refresh token theft — indefinite account takeover | **36** | 9 | 4 |
+| I04 | Rolling deploy mid-request — connection reset | **36** | 6 | 6 |
+| S05 | Rate limit bypass via IP rotation | **36** | 6 | 6 |
+| D03 | Migration on live traffic — ACCESS EXCLUSIVE lock | **36** | 9 | 4 |
+| M05 | ACE-Step inference stalls — SIGTERM not honoured | **32** | 8 | 4 |
+| M08 | Llama-3 GPU stall — lyrics generation hangs | **32** | 8 | 4 |
+| S01 | JWT access token replay | **32** | 8 | 4 |
+| S03 | SSRF via webhook URL | **32** | 8 | 4 |
+| A02 | Redis unavailable — rate limiter disabled | **32** | 8 | 4 |
+| A10 / D06 | Credits race condition — double spend | **32** | 8 | 4 |
+| M02 | GPU memory leak across requests | **35** | 7 | 5 |
+| W02 | Worker crash mid-generation — no checkpointing | **35** | 7 | 5 |
+| D01 | Connection pool exhaustion from worker | **40** | 8 | 5 |
+| A06 | Stripe webhook replay — double credit grant | **40** | 8 | 5 |
 
 ---
 
-## Appendix B — Configuration Values Referenced
+## Chaos Engineering Test Matrix
+
+Run these experiments quarterly in staging before each production milestone. Record blast radius and recovery time.
+
+| Test ID | Experiment | Target | Method | Pass Criteria |
+|---------|------------|--------|--------|---------------|
+| CE-01 | Redis total outage | API + Worker | `docker stop redis` or `kubectl delete pod redis-0` | API degrades gracefully (no 500s on rate-limit paths); queued tasks resume within 60 s of Redis recovery; DLQ depth does not grow |
+| CE-02 | PostgreSQL primary failure | API + Worker | Kill PG primary; promote replica | RTO < 30 min; no data loss after pgBackRest recovery; generation jobs requeue correctly |
+| CE-03 | CUDA OOM injection | ML service | Submit 5 concurrent `duration_seconds=300` requests | Only the offending request(s) fail; other concurrent requests succeed; GPU memory recovers within 30 s |
+| CE-04 | Worker OOM-Kill mid-generation | Worker | `stress-ng --vm 1 --vm-bytes 90%` on worker node during active generation | Task requeued; final generation completes via retry (idempotent pipeline); no duplicate tracks created |
+| CE-05 | R2 network partition | Worker | `iptables -A OUTPUT -d <R2_endpoint_ip> -j DROP` on worker node | Upload retried 3×; task moved to DLQ on exhaustion; user sees `FAILED` status, not 500; temp audio file still present for manual recovery |
+| CE-06 | Rolling deploy under load | API | `kubectl rollout restart deployment/gbedu-api` with 50 req/s Locust load | Zero 5xx during rollout; connection drain completes within `terminationGracePeriodSeconds`; no generation jobs lost |
+| CE-07 | Rate limiter Redis eviction | API | Set `maxmemory 1mb` on Redis; hammer with authenticated requests | Rate limits still enforced (in-process fallback); no 500s on rate-limited endpoints |
+| CE-08 | Stripe webhook replay | API | Replay same Stripe `event.id` 10× within 60 s | Exactly 1 credit grant; 9 idempotent 200 OK responses; no duplicate DB rows |
+| CE-09 | SSRF probe | API | `POST /api/v1/contact` (or webhook URL field) with `http://169.254.169.254/latest/meta-data/` | 422 Unprocessable Entity returned; zero outbound HTTP requests to the SSRF URL observed in network audit |
+| CE-10 | ML service total outage | Worker + API | `kubectl scale deployment/gbedu-ml --replicas=0` | API returns 502 with `ML_UNAVAILABLE` on generation submit; existing tasks marked FAILED after timeout; `/health/detailed` shows `ml_service: down`; API recovers when ML is restored |
+
+---
+
+## Graceful Degradation Matrix
+
+| Feature | Primary Dependency | Degraded Behaviour | User-Visible Impact | Auto-Recovery? |
+|---------|-------------------|--------------------|---------------------|----------------|
+| Song generation | ACE-Step 1.5 | Falls back to Stable Audio 3.0 → YuE via fallback chain | Lower Afrobeats-specific audio quality; no user-visible error unless all three fail | Yes — circuit breaker recovery at `circuit_recovery_timeout=60s` |
+| Song generation | Celery worker pool | Generations queue in Redis; completions delayed | HTTP 202 returned; user sees "Processing…" with no ETA | Yes — drains when workers restart; messages preserved in Redis |
+| Song generation | PostgreSQL | DB writes fail; ML inference may succeed but results cannot be persisted | Generations appear to process but never appear in history; R2 orphan files accumulate | No — requires DB recovery |
+| Voice model conversion | RVC v2 | Generation completes without voice conversion; base audio returned | User's custom voice not applied; track still listenable | Partial — auto-disable voice models with > 3 consecutive errors (recommended, M07) |
+| Marketplace browsing | PostgreSQL + Redis cache | Cache miss forces direct DB reads; high DB load slows listings | p95 browse latency degrades; no functional loss | Yes — cache repopulates as load normalises |
+| Audio playback | Cloudflare R2 / CDN | Track metadata renders but audio URLs return 5xx | Users can browse but cannot stream or download | Yes — R2 outages typically < 30 min; no local fallback |
+| Payments (Stripe) | Stripe webhook | Webhook delivery failure; subscription not activated | Payment charged but subscription not activated; requires retry via Stripe dashboard | Partial — Stripe retries for 72 h; idempotency table (A06) makes retry safe |
+| Payments (Paystack) | Paystack webhook | HMAC failure silently drops event | Nigerian users' payments not recorded; silent failure | No — requires manual Paystack transaction API reconciliation |
+| Authentication | Redis (JTI revocation) | Revoked tokens remain valid until 30-min TTL expires | Logged-out users or compromised accounts can still call authenticated endpoints for ≤ 30 min | Yes — tokens expire naturally; short TTL bounds blast radius |
+
+---
+
+## Sign-Off Checklist
+
+All CRITICAL (RPN > 50) items must have a merged mitigation and a passing chaos test before production launch.
+
+| Item | Owner | Target Date | Status |
+|------|-------|-------------|--------|
+| M01 — per-request VRAM budget enforcement | ML Engineering | — | OPEN |
+| M02 — GPU memory leak metric + alert | ML Engineering | — | OPEN |
+| W03 — Redis Sentinel (3-node) deployed | Infrastructure | — | OPEN |
+| S02 — Refresh token family detection | Auth Engineering | — | OPEN |
+| I04 — `terminationGracePeriodSeconds: 120` + preStop hook | Infrastructure | — | OPEN |
+| S05 — Behavioral rate limiting / CAPTCHA on registration | API Engineering | — | OPEN |
+| D03 — Zero-downtime migration enforcement (pre-upgrade Job) | DB Engineering | — | OPEN |
+| A10 / D06 — Atomic credit decrement with RETURNING | API Engineering | — | OPEN |
+| S03 — SSRF URL validation on all user-supplied URLs | API Engineering | — | OPEN |
+| A02 — In-process rate limiter fallback when Redis is down | API Engineering | — | OPEN |
+| A06 — Webhook idempotency table (Stripe + Paystack) | API Engineering | — | OPEN |
+| M05 — Per-step deadline in `GenerationPipelineOrchestrator` | ML Engineering | — | OPEN |
+| M08 — `max_new_tokens` cap in every Llama-3 call | ML Engineering | — | OPEN |
+| W02 — Stage checkpointing for pipeline retry resume | Worker Engineering | — | OPEN |
+| All CE-01 through CE-10 chaos tests passing in staging | QA | — | OPEN |
+| RUNBOOKS.md updated with JWT rotation, DLQ remediation, DB migration, Redis recovery procedures | All teams | — | OPEN |
+
+---
+
+*Reviewed by*: __________________ *Date*: __________________
+
+*Approved by*: __________________ *Date*: __________________
+
+---
+
+## Appendix A — Configuration Values Referenced
 
 | Setting | Value | Source |
 |---------|-------|--------|
-| `pool_size` | 20 | `DatabaseSettings` in `gbedu_core/config.py` |
-| `max_overflow` | 40 | `DatabaseSettings` in `gbedu_core/config.py` |
-| `pool_recycle` | 3600s | `DatabaseSettings` in `gbedu_core/config.py` |
-| `pool_pre_ping` | True | `DatabaseSettings` in `gbedu_core/config.py` |
-| `task_acks_late` | True | `CelerySettings` in `gbedu_core/config.py` |
-| `task_reject_on_worker_lost` | True | `CelerySettings` in `gbedu_core/config.py` |
-| `worker_prefetch_multiplier` | 1 | `CelerySettings` in `gbedu_core/config.py` |
-| `soft_time_limit` | 720s | `run_generation_pipeline` task in `generation.py` |
-| `time_limit` | 780s | `run_generation_pipeline` task in `generation.py` |
-| `max_retries` | 3 | `run_generation_pipeline` task in `generation.py` |
-| Retry countdowns | 30s, 90s, 270s | `_RETRY_COUNTDOWN` in `generation.py` |
-| `circuit_failure_threshold` | 5 | `MLSettings` in `gbedu_core/config.py` |
-| `circuit_recovery_timeout` | 60s | `MLSettings` in `gbedu_core/config.py` |
-| `inference_timeout` | 300s | `MLSettings` in `gbedu_core/config.py` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | 30 | `JWTSettings` in `gbedu_core/config.py` |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | 30 | `JWTSettings` in `gbedu_core/config.py` |
-| `JWT_ALGORITHM` | HS256 | `JWTSettings` in `gbedu_core/config.py` |
-| ML fallback order | ACE-Step → Stable Audio → YuE | `MusicGenerator.__init__()` in `music_generator.py` |
-| Celery broker db | 1 | `CelerySettings.broker_url` default |
-| Celery result backend db | 2 | `CelerySettings.result_backend` default |
-| API cache db | 0 | `RedisSettings.url` default |
+| `pool_size` | 20 | `DatabaseSettings` — `libs/core/src/gbedu_core/config.py` |
+| `max_overflow` | 40 | `DatabaseSettings` — `libs/core/src/gbedu_core/config.py` |
+| `pool_recycle` | 3600 s | `DatabaseSettings` — `libs/core/src/gbedu_core/config.py` |
+| `pool_pre_ping` | True | `DatabaseSettings` — `libs/core/src/gbedu_core/config.py` |
+| `task_acks_late` | True | `CelerySettings` — `libs/core/src/gbedu_core/config.py` |
+| `task_reject_on_worker_lost` | True | `CelerySettings` — `libs/core/src/gbedu_core/config.py` |
+| `worker_prefetch_multiplier` | 1 | `CelerySettings` — `libs/core/src/gbedu_core/config.py` |
+| `soft_time_limit` | 720 s | `run_generation_pipeline` — `services/worker/src/gbedu_worker/tasks/generation.py` |
+| `time_limit` | 780 s | `run_generation_pipeline` — `services/worker/src/gbedu_worker/tasks/generation.py` |
+| `max_retries` | 3 | `run_generation_pipeline` — `services/worker/src/gbedu_worker/tasks/generation.py` |
+| Retry countdowns | 30 s, 90 s, 270 s | `_RETRY_COUNTDOWN` — `services/worker/src/gbedu_worker/tasks/generation.py` |
+| `circuit_failure_threshold` | 5 | `MLSettings` — `libs/core/src/gbedu_core/config.py` |
+| `circuit_recovery_timeout` | 60 s | `MLSettings` — `libs/core/src/gbedu_core/config.py` |
+| `inference_timeout` | 300 s | `MLSettings` — `libs/core/src/gbedu_core/config.py` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 30 | `JWTSettings` — `libs/core/src/gbedu_core/config.py` |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | 30 | `JWTSettings` — `libs/core/src/gbedu_core/config.py` |
+| `JWT_ALGORITHM` | HS256 | `JWTSettings` — `libs/core/src/gbedu_core/config.py` |
+| DLQ queue name | `gbedu.dlq` | `celery_app.py` — `services/worker/src/gbedu_worker/celery_app.py` |
+| Generation queue | `generation` | `celery_app.py` — `services/worker/src/gbedu_worker/celery_app.py` |
+| Celery broker DB | 1 | `CelerySettings.broker_url` default |
+| Celery result backend DB | 2 | `CelerySettings.result_backend` default |
+| API cache DB | 0 | `RedisSettings.url` default |
 | R2 bucket (prod) | `gbedu-audio` | `StorageSettings.r2_bucket_name` |
+| ML fallback order | ACE-Step → Stable Audio 3.0 → YuE | `services/ml/src/gbedu_ml/models/` |

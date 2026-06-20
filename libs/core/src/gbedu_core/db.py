@@ -115,11 +115,13 @@ class SoftDeleteMixin:
 # ── FastAPI dependency ─────────────────────────────────────────────────────────
 
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_engine: AsyncEngine | None = None
 
 
 def init_db(engine: AsyncEngine) -> None:
 	"""Call once at application startup to wire up the session factory."""
-	global _session_factory
+	global _session_factory, _engine
+	_engine = engine
 	_session_factory = make_session_factory(engine)
 
 
@@ -149,3 +151,15 @@ async def ping_database(engine: AsyncEngine) -> float:
 	async with engine.connect() as conn:
 		await conn.execute(text("SELECT 1"))
 	return (time.perf_counter() - start) * 1000
+
+
+def get_pool_status(engine: AsyncEngine) -> dict[str, int]:
+	"""Return current connection pool statistics (synchronous — no I/O)."""
+	pool = engine.sync_engine.pool
+	return {
+		"pool_size": pool.size(),
+		"checked_in": pool.checkedin(),
+		"checked_out": pool.checkedout(),
+		"overflow": pool.overflow(),
+		"invalid": pool.invalid(),
+	}

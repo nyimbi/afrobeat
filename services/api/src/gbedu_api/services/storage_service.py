@@ -9,10 +9,17 @@ import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from circuitbreaker import CircuitBreaker, CircuitBreakerError
+
 from gbedu_core.config import StorageSettings
 from gbedu_core.errors import StorageDeleteError, StorageError, StorageUploadError
 
 log = structlog.get_logger(__name__)
+
+# Storage circuit breaker — trips after 5 consecutive S3/R2 failures, recovers after 60 s.
+# Prevents cascading timeouts when R2 is unavailable.
+_STORAGE_CIRCUIT_FAILURE_THRESHOLD = 5
+_STORAGE_CIRCUIT_RECOVERY_TIMEOUT = 60
 
 _RETRY_KWARGS: dict[str, Any] = dict(
 	retry=retry_if_exception_type((BotoCoreError, ClientError)),
@@ -76,6 +83,11 @@ class StorageClient:
 			aws_secret_access_key=settings.r2_secret_access_key,
 			region_name="auto",
 		)
+		self._circuit = CircuitBreaker(
+			failure_threshold=_STORAGE_CIRCUIT_FAILURE_THRESHOLD,
+			recovery_timeout=_STORAGE_CIRCUIT_RECOVERY_TIMEOUT,
+			name="storage",
+		)
 
 	async def upload_audio(
 		self,
@@ -101,7 +113,10 @@ class StorageClient:
 
 		try:
 			loop = asyncio.get_event_loop()
-			await loop.run_in_executor(None, _upload)
+			await loop.run_in_executor(None, self._circuit(_upload))
+		except CircuitBreakerError as exc:
+			log.error("storage.circuit_open", key=key)
+			raise StorageUploadError("Storage circuit breaker open — R2 unavailable", path=key) from exc
 		except (BotoCoreError, ClientError) as exc:
 			log.error("storage.upload.failed", key=key, error=str(exc))
 			raise StorageUploadError(f"Failed to upload {key}", path=key) from exc
@@ -125,7 +140,10 @@ class StorageClient:
 
 		try:
 			loop = asyncio.get_event_loop()
-			url = await loop.run_in_executor(None, _presign)
+			url = await loop.run_in_executor(None, self._circuit(_presign))
+		except CircuitBreakerError as exc:
+			log.error("storage.circuit_open", key=key)
+			raise StorageError("Storage circuit breaker open — R2 unavailable", path=key) from exc
 		except (BotoCoreError, ClientError) as exc:
 			log.error("storage.presign.failed", key=key, error=str(exc))
 			raise StorageError(f"Failed to generate presigned URL for {key}", path=key) from exc
@@ -142,7 +160,10 @@ class StorageClient:
 
 		try:
 			loop = asyncio.get_event_loop()
-			await loop.run_in_executor(None, _delete)
+			await loop.run_in_executor(None, self._circuit(_delete))
+		except CircuitBreakerError as exc:
+			log.error("storage.circuit_open", key=key)
+			raise StorageDeleteError("Storage circuit breaker open — R2 unavailable", path=key) from exc
 		except (BotoCoreError, ClientError) as exc:
 			log.error("storage.delete.failed", key=key, error=str(exc))
 			raise StorageDeleteError(f"Failed to delete {key}", path=key) from exc

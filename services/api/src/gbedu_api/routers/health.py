@@ -146,6 +146,27 @@ async def ready(
 
 # ── Detailed health endpoint ───────────────────────────────────────────────────
 
+def _check_db_pool() -> ComponentHealth:
+	"""Read pool statistics synchronously — no I/O, safe to call anywhere."""
+	try:
+		from gbedu_core.db import _engine, get_pool_status
+		if _engine is None:
+			return ComponentHealth(status="down", detail="engine not initialised")
+		stats = get_pool_status(_engine)
+		utilization = stats["checked_out"] / max(stats["pool_size"], 1)
+		status: ComponentStatus = "ok"
+		if utilization >= 0.9:
+			status = "degraded"
+		detail = (
+			f"size={stats['pool_size']} in={stats['checked_in']} "
+			f"out={stats['checked_out']} overflow={stats['overflow']} "
+			f"invalid={stats['invalid']}"
+		)
+		return ComponentHealth(status=status, detail=detail)
+	except Exception as exc:
+		return ComponentHealth(status="down", detail=str(exc))
+
+
 async def _check_database() -> ComponentHealth:
 	"""Probe the DB with SELECT 1, timeout after _COMPONENT_TIMEOUT seconds."""
 	try:
@@ -233,15 +254,19 @@ async def detailed_health(
 
 	Each component check is capped at 2 s. All four checks run concurrently.
 	"""
-	db_health, redis_health, ml_health, storage_health = await asyncio.gather(
-		_check_database(),
-		_check_redis(redis),
-		_check_ml_service(ml_client),
-		_check_storage(),
+	(db_health, redis_health, ml_health, storage_health), pool_health = await asyncio.gather(
+		asyncio.gather(
+			_check_database(),
+			_check_redis(redis),
+			_check_ml_service(ml_client),
+			_check_storage(),
+		),
+		asyncio.get_event_loop().run_in_executor(None, _check_db_pool),
 	)
 
 	components: dict[str, ComponentHealth] = {
 		"database": db_health,
+		"db_pool": pool_health,
 		"redis": redis_health,
 		"ml_service": ml_health,
 		"storage": storage_health,
@@ -253,6 +278,7 @@ async def detailed_health(
 	# Non-critical degradation
 	ml_degraded = ml_health.status in ("degraded", "down")
 	storage_degraded = storage_health.status in ("degraded", "down")
+	pool_degraded = pool_health.status in ("degraded", "down")
 
 	degraded_features: list[str] = []
 	critical_features: list[str] = []
@@ -261,13 +287,15 @@ async def detailed_health(
 		degraded_features.extend(["voice_models", "real_time_generation"])
 	if storage_degraded:
 		degraded_features.append("marketplace")
+	if pool_degraded:
+		degraded_features.append("db_throughput")
 
 	if critical_down:
 		critical_features.extend(["generation", "authentication", "payments"])
 
 	if critical_down:
 		overall: OverallStatus = "critical"
-	elif ml_degraded or storage_degraded:
+	elif ml_degraded or storage_degraded or pool_degraded:
 		overall = "degraded"
 	else:
 		overall = "healthy"
@@ -276,6 +304,7 @@ async def detailed_health(
 		"health.detailed",
 		overall=overall,
 		db=db_health.status,
+		db_pool=pool_health.status,
 		redis=redis_health.status,
 		ml=ml_health.status,
 		storage=storage_health.status,

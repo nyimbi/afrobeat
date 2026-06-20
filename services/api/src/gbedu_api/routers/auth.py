@@ -4,7 +4,7 @@ from typing import Annotated
 
 import httpx
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from redis.asyncio import Redis
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gbedu_api.config import RATE_LIMIT_LOGIN, RATE_LIMIT_REFRESH, RATE_LIMIT_REGISTER, get_settings
 from gbedu_api.deps import get_current_active_user, get_db, get_redis, limiter
 from gbedu_api.services.auth_service import AuthService, TokenPair
-from gbedu_api.services.email_service import EmailService
+from gbedu_api.worker_tasks import enqueue_password_reset_email, enqueue_verify_email, enqueue_welcome_email
 from gbedu_core.errors import GbeduError
 from gbedu_core.models.user import User
 
@@ -120,7 +120,6 @@ def _user_summary(user: User) -> UserSummary:
 async def register(
 	request: Request,
 	body: RegisterRequest,
-	background_tasks: BackgroundTasks,
 	db: Annotated[AsyncSession, Depends(get_db)],
 	redis: Annotated[Redis, Depends(get_redis)],
 ) -> RegisterResponse:
@@ -138,9 +137,9 @@ async def register(
 	settings = get_settings()
 	verify_url = f"{settings.frontend_url}/verify-email?token={verify_token}"
 
-	email_svc = EmailService(settings.email)
-	background_tasks.add_task(email_svc.send_verify_email, user.email, user.full_name, verify_url)
-	background_tasks.add_task(email_svc.send_welcome, user.email, user.full_name)
+	# Queue via Celery — durable, retryable, idempotent (24 h dedup key in Redis)
+	enqueue_verify_email(user.id, verify_url)
+	enqueue_welcome_email(user.id)
 
 	return RegisterResponse(user=_user_summary(user), tokens=_token_response(tokens))
 
@@ -232,7 +231,6 @@ async def verify_email(
 async def forgot_password(
 	request: Request,
 	body: ForgotPasswordRequest,
-	background_tasks: BackgroundTasks,
 	db: Annotated[AsyncSession, Depends(get_db)],
 	redis: Annotated[Redis, Depends(get_redis)],
 ) -> MessageResponse:
@@ -243,16 +241,12 @@ async def forgot_password(
 	if reset_token:
 		reset_url = f"{settings.frontend_url}/reset-password?token={reset_token}"
 		from sqlalchemy import select
-		from gbedu_core.models.user import User
 		result = await db.execute(
 			select(User).where(User.email == str(body.email).lower())
 		)
 		user = result.scalar_one_or_none()
 		if user:
-			email_svc = EmailService(settings.email)
-			background_tasks.add_task(
-				email_svc.send_password_reset, user.email, user.full_name, reset_url
-			)
+			enqueue_password_reset_email(user.id, reset_url)
 
 	# Always return the same response to prevent email enumeration
 	return MessageResponse(message="If that email is registered, a reset link has been sent")
