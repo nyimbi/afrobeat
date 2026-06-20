@@ -69,16 +69,16 @@ async def owasp_client(
 	app.dependency_overrides[get_db] = _override_db
 	app.dependency_overrides[get_redis] = _override_redis
 
-	_mock_email = MagicMock()
-	_mock_email.send_verify_email = AsyncMock()
-	_mock_email.send_welcome = AsyncMock()
-	_mock_email.send_password_reset = AsyncMock()
-	_mock_email.send_generation_complete = AsyncMock()
-
 	n = next(_ip_counter)
 	unique_ip = f"10.{(n >> 8) & 0xFF}.{n & 0xFF}.1"
 
-	with patch("gbedu_api.routers.auth.EmailService", return_value=_mock_email):
+	# Email is now queued to Celery — patch the worker_tasks shim so no broker
+	# connection is required during tests.
+	with (
+		patch("gbedu_api.worker_tasks.enqueue_verify_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_welcome_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_password_reset_email", MagicMock()),
+	):
 		async with httpx.AsyncClient(
 			transport=httpx.ASGITransport(app=app, client=(unique_ip, 9000)),  # type: ignore[arg-type]
 			base_url="http://testserver",

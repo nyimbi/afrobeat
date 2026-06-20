@@ -62,6 +62,10 @@ _JOB_CHANNEL_PREFIX = "job:"
 # TTL for idempotency keys (24 h in seconds)
 _IDEMPOTENCY_TTL = 86_400
 
+# Redis checkpoint TTL for pipeline stage results (2 h — longer than max retry window)
+_CHECKPOINT_TTL = 7_200
+_CHECKPOINT_PREFIX = "pipeline_ckpt:"
+
 
 class GenerationPipelineOrchestrator:
 	"""Drives a single GenerationJob through its full lifecycle.
@@ -141,6 +145,13 @@ class GenerationPipelineOrchestrator:
 
 	async def _stage_ml_generate(self, job: GenerationJob) -> dict[str, Any]:
 		"""POST to ML service, return raw generation result dict."""
+		# 1. Check Redis checkpoint first — survives a crash between ML completion
+		#    and DB flush, where job.metadata_ would not yet have ml_result.
+		ckpt = await self._checkpoint_get("ml_result")
+		if ckpt:
+			self._log.info("ml_generate: resuming from Redis checkpoint")
+			return ckpt
+
 		if job.status not in (JobStatus.queued, JobStatus.ml_generating):
 			# Was already past this stage on a previous attempt — skip ML call
 			# and return what's stored in metadata
@@ -175,6 +186,11 @@ class GenerationPipelineOrchestrator:
 				result = await self._call_ml_service(payload)
 
 		assert result is not None
+
+		# Write Redis checkpoint BEFORE DB flush — if the worker crashes between
+		# ML completion and DB commit, the retry recovers from Redis instead of
+		# re-invoking the ML service (saves 30–90 s of GPU time).
+		await self._checkpoint_set("ml_result", result)
 
 		# Persist ML result so we can skip this stage on retry
 		job.metadata_ = {**job.metadata_, "ml_result": result}
@@ -422,6 +438,45 @@ class GenerationPipelineOrchestrator:
 		self._session.add(job)
 		await self._session.flush()
 		self._log.debug("status updated", status=status.value, progress=progress)
+
+	async def _checkpoint_set(self, stage: str, data: dict[str, Any]) -> None:
+		"""Persist stage result to Redis before the DB flush.
+
+		If the worker crashes between ML completion and the DB write, the retry
+		finds this key and skips re-calling the ML service (saving 30-90 s of
+		GPU time and avoiding duplicate generations).
+		"""
+		import redis.asyncio as aioredis
+
+		key = f"{_CHECKPOINT_PREFIX}{self._job_id}:{stage}"
+		try:
+			r = await aioredis.from_url(
+				_redis_settings.url, encoding="utf-8", decode_responses=True
+			)
+			async with r:
+				await r.setex(key, _CHECKPOINT_TTL, json.dumps(data))
+			self._log.debug("checkpoint.set", stage=stage, key=key)
+		except Exception as exc:
+			# Checkpoint write failure is non-fatal — the DB write below is the source of truth.
+			self._log.warning("checkpoint.set_failed", stage=stage, error=str(exc))
+
+	async def _checkpoint_get(self, stage: str) -> dict[str, Any] | None:
+		"""Retrieve a previously checkpointed stage result from Redis."""
+		import redis.asyncio as aioredis
+
+		key = f"{_CHECKPOINT_PREFIX}{self._job_id}:{stage}"
+		try:
+			r = await aioredis.from_url(
+				_redis_settings.url, encoding="utf-8", decode_responses=True
+			)
+			async with r:
+				raw = await r.get(key)
+			if raw:
+				self._log.info("checkpoint.hit", stage=stage)
+				return json.loads(raw)
+		except Exception as exc:
+			self._log.warning("checkpoint.get_failed", stage=stage, error=str(exc))
+		return None
 
 	async def _publish_progress(
 		self,

@@ -25,6 +25,7 @@ from gbedu_core.models.payment import (
 	PaymentStatus,
 	Subscription,
 	SubscriptionInterval,
+	WebhookEvent,
 )
 from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier, User
 
@@ -168,11 +169,21 @@ async def stripe_webhook(
 	event_id = event["id"]
 	idempotency_key = f"{_STRIPE_EVENT_IDEMPOTENCY_PREFIX}{event_id}"
 
-	# Atomic SET NX — closes the TOCTOU race that exists() → setex() leaves open.
-	# Returns True if we just claimed the key, None/False if already claimed.
+	# Fast path: Redis SET NX (handles 99.9% of duplicates with sub-ms latency).
 	claimed = await redis.set(idempotency_key, "processing", nx=True, ex=_IDEMPOTENCY_TTL)
 	if not claimed:
-		log.info("stripe.webhook.duplicate", event_id=event_id, event_type=event["type"])
+		log.info("stripe.webhook.duplicate.redis", event_id=event_id, event_type=event["type"])
+		return {"status": "already_processed"}
+
+	# Durable path: DB check survives Redis restarts between delivery attempts.
+	# If the webhook was already written to webhook_events, skip processing and
+	# re-prime Redis so the fast path catches the next duplicate.
+	existing = await db.execute(
+		select(WebhookEvent).where(WebhookEvent.event_id == event_id)
+	)
+	if existing.scalar_one_or_none():
+		await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
+		log.info("stripe.webhook.duplicate.db", event_id=event_id)
 		return {"status": "already_processed"}
 
 	event_type = event["type"]
@@ -180,14 +191,20 @@ async def stripe_webhook(
 
 	try:
 		await _handle_stripe_event(event, db)
+		# Write durable record within the same transaction as the business logic.
+		db.add(WebhookEvent(
+			id=uuid7str(),
+			event_id=event_id,
+			provider=PaymentProvider.stripe,
+			event_type=event_type,
+			processed_at=datetime.now(timezone.utc),
+		))
+		await db.flush()
 	except Exception as exc:
-		# Release claim so Stripe can retry delivery.
 		await redis.delete(idempotency_key)
 		log.error("stripe.webhook.handler_error", event_id=event_id, error=str(exc))
 		raise HTTPException(status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)})
 
-	# Overwrite "processing" → "1" so future duplicates are rejected even after a pod restart
-	# that cleared the key mid-flight (the NX set would have re-acquired there, which is fine).
 	await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 	return {"status": "ok"}
 
@@ -657,6 +674,15 @@ async def paystack_webhook(
 
 	claimed = await redis.set(idempotency_key, "processing", nx=True, ex=_IDEMPOTENCY_TTL)
 	if not claimed:
+		log.info("paystack.webhook.duplicate.redis", reference=event_ref)
+		return {"status": "already_processed"}
+
+	existing = await db.execute(
+		select(WebhookEvent).where(WebhookEvent.event_id == event_ref)
+	)
+	if existing.scalar_one_or_none():
+		await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
+		log.info("paystack.webhook.duplicate.db", reference=event_ref)
 		return {"status": "already_processed"}
 
 	event_type = event.get("event", "")
@@ -712,6 +738,15 @@ async def paystack_webhook(
 		await redis.delete(idempotency_key)
 		log.error("paystack.webhook.handler_error", reference=event_ref, error=str(exc))
 		raise HTTPException(status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)})
+
+	db.add(WebhookEvent(
+		id=uuid7str(),
+		event_id=event_ref,
+		provider=PaymentProvider.paystack,
+		event_type=event_type,
+		processed_at=datetime.now(timezone.utc),
+	))
+	await db.flush()
 
 	await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 	return {"status": "ok"}

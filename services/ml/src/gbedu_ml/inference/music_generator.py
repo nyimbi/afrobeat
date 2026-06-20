@@ -63,6 +63,31 @@ class MusicGenerator:
 				failures.append({"model": model.model_id, "reason": "circuit breaker open"})
 				continue
 
+			# FMEA M01: guard against OOM-kill cascade on GPU.
+			# Reject requests when >85% of VRAM is already reserved rather than
+			# letting the model allocate and crash the entire process.
+			try:
+				import torch
+				if torch.cuda.is_available():
+					reserved = torch.cuda.memory_reserved(0)
+					total = torch.cuda.get_device_properties(0).total_memory
+					utilization = reserved / total
+					if utilization > 0.85:
+						log.error(
+							"music_gen.vram_budget_exceeded",
+							model=model.model_id,
+							reserved_gb=round(reserved / 1e9, 2),
+							total_gb=round(total / 1e9, 2),
+							utilization_pct=round(utilization * 100, 1),
+						)
+						raise GenerationError(
+							f"GPU memory budget exceeded ({utilization:.0%} reserved) — "
+							"request rejected to prevent OOM cascade",
+							details={"reserved_gb": reserved / 1e9, "total_gb": total / 1e9},
+						)
+			except ImportError:
+				pass
+
 			try:
 				log.info("music_gen.trying", model=model.model_id)
 				audio_path = await model.generate_safe(

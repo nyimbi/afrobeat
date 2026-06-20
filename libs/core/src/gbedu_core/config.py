@@ -157,6 +157,13 @@ class Settings(BaseSettings):
 				"JWT_SECRET_KEY must be set to a secure random value in production — "
 				"the default is a known plaintext value."
 			)
+			assert self.stripe.secret_key, (
+				"STRIPE_SECRET_KEY must be set in production."
+			)
+			assert self.paystack.secret_key, (
+				"PAYSTACK_SECRET_KEY must be set in production — "
+				"empty key allows forged Paystack webhook attacks."
+			)
 		return self
 
 	@property

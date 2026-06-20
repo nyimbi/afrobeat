@@ -20,6 +20,35 @@ class PaymentProvider(str, enum.Enum):
 	paystack = "paystack"
 
 
+class WebhookEvent(Base):
+	"""Durable deduplication record for processed payment webhooks.
+
+	Redis idempotency keys are cleared on restart; this table survives.
+	Created immediately before processing begins; presence means the event
+	has been (or is being) processed. Used by both Stripe and Paystack handlers.
+	"""
+
+	__tablename__ = "webhook_events"
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7str)
+	event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+	provider: Mapped[str] = mapped_column(
+		Enum(PaymentProvider, name="payment_provider", create_type=False),
+		nullable=False,
+	)
+	event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+	processed_at: Mapped[datetime] = mapped_column(
+		DateTime(timezone=True), nullable=False,
+	)
+	metadata_: Mapped[dict[str, Any]] = mapped_column(
+		"metadata", JSONB, nullable=False, default=dict,
+	)
+
+	__table_args__ = (
+		Index("ix_webhook_events_event_id", "event_id"),
+	)
+
+
 class PaymentStatus(str, enum.Enum):
 	pending = "pending"
 	succeeded = "succeeded"

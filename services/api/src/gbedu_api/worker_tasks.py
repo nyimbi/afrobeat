@@ -15,11 +15,11 @@ log = structlog.get_logger(__name__)
 def enqueue_generation(job_id: str) -> None:
 	assert job_id, "job_id required"
 	try:
-		from gbedu_worker.tasks.generation import generate_track
-		generate_track.delay(job_id)
+		from gbedu_worker.tasks.generation import run_generation_pipeline
+		run_generation_pipeline.delay(job_id)
 		log.info("worker.enqueue.generation", job_id=job_id)
 	except ImportError:
-		log.warning("worker.not_installed", task="generate_track", job_id=job_id)
+		log.warning("worker.not_installed", task="run_generation_pipeline", job_id=job_id)
 
 
 def revoke_task(celery_task_id: str) -> None:

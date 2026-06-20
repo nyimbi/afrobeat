@@ -13,9 +13,40 @@ from pydantic import BaseModel, ConfigDict
 from gbedu_api.config import API_VERSION, get_settings
 from gbedu_api.deps import get_ml_client, get_redis
 
+from prometheus_client import (
+	CONTENT_TYPE_LATEST,
+	REGISTRY,
+	Gauge,
+	generate_latest,
+)
+
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["health"])
+
+# ── Prometheus gauges ──────────────────────────────────────────────────────────
+# These are registered once at import time (prometheus_client raises if re-registered).
+_gauge_gpu_memory_reserved = Gauge(
+	"gbedu_gpu_memory_reserved_bytes",
+	"GPU VRAM reserved by PyTorch (bytes). Zero on CPU-only hosts.",
+)
+_gauge_gpu_memory_total = Gauge(
+	"gbedu_gpu_memory_total_bytes",
+	"Total GPU VRAM available (bytes). Zero on CPU-only hosts.",
+)
+_gauge_db_pool_checkedout = Gauge(
+	"gbedu_db_pool_checkedout",
+	"DB connections currently checked out from the SQLAlchemy pool.",
+)
+_gauge_db_pool_size = Gauge(
+	"gbedu_db_pool_size",
+	"Configured SQLAlchemy connection pool size.",
+)
+_gauge_celery_queue_length = Gauge(
+	"gbedu_celery_queue_length",
+	"Approximate number of messages waiting in the Celery default queue.",
+	["queue"],
+)
 
 # Component-check timeout in seconds — must be low enough that the endpoint
 # returns before any upstream proxy's own timeout.
@@ -145,6 +176,71 @@ async def ready(
 
 
 # ── Detailed health endpoint ───────────────────────────────────────────────────
+
+def _update_prometheus_gauges(redis_url: str) -> None:
+	"""Refresh all Prometheus gauges synchronously — called from the /metrics handler."""
+	# GPU memory
+	try:
+		import torch
+		if torch.cuda.is_available():
+			reserved = torch.cuda.memory_reserved(0)
+			total = torch.cuda.get_device_properties(0).total_memory
+			_gauge_gpu_memory_reserved.set(reserved)
+			_gauge_gpu_memory_total.set(total)
+		else:
+			_gauge_gpu_memory_reserved.set(0)
+			_gauge_gpu_memory_total.set(0)
+	except Exception:
+		pass
+
+	# DB pool
+	try:
+		from gbedu_core.db import _engine, get_pool_status
+		if _engine is not None:
+			stats = get_pool_status(_engine)
+			_gauge_db_pool_checkedout.set(stats["checked_out"])
+			_gauge_db_pool_size.set(stats["pool_size"])
+	except Exception:
+		pass
+
+	# Celery queue lengths (synchronous Redis LLEN)
+	try:
+		import redis as sync_redis
+		r = sync_redis.from_url(redis_url, socket_connect_timeout=1)
+		for q in ("default", "generation", "low"):
+			try:
+				length = r.llen(q)
+				_gauge_celery_queue_length.labels(queue=q).set(length)
+			except Exception:
+				pass
+		r.close()
+	except Exception:
+		pass
+
+
+@router.get(
+	"/metrics",
+	summary="Prometheus metrics scrape endpoint",
+	response_class=None,
+	include_in_schema=False,
+)
+async def prometheus_metrics() -> "Response":
+	"""Expose Prometheus-format metrics for Grafana/alertmanager scraping.
+
+	Gauges are updated on each scrape (pull model) — no background thread needed.
+	"""
+	from fastapi import Response as FastAPIResponse
+
+	settings = get_settings()
+	loop = asyncio.get_event_loop()
+	await loop.run_in_executor(
+		None, _update_prometheus_gauges, settings.redis.url
+	)
+	return FastAPIResponse(
+		content=generate_latest(REGISTRY),
+		media_type=CONTENT_TYPE_LATEST,
+	)
+
 
 def _check_db_pool() -> ComponentHealth:
 	"""Read pool statistics synchronously — no I/O, safe to call anywhere."""
