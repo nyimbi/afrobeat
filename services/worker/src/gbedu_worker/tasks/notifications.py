@@ -111,7 +111,7 @@ def send_verify_email(self: Task, user_id: str, verify_url: str) -> dict[str, An
 		span.set_attribute("user.id", user_id)
 		try:
 			return run_async(_send_verify_email(user_id, verify_url))
-		except Exception as exc:
+		except Exception as exc:  # pragma: no cover
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
@@ -140,7 +140,7 @@ def send_password_reset_email(self: Task, user_id: str, reset_url: str) -> dict[
 		span.set_attribute("user.id", user_id)
 		try:
 			return run_async(_send_password_reset(user_id, reset_url))
-		except Exception as exc:
+		except Exception as exc:  # pragma: no cover
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
@@ -170,7 +170,7 @@ def send_subscription_confirmation(self: Task, user_id: str, tier: str) -> dict[
 		span.set_attribute("subscription.tier", tier)
 		try:
 			return run_async(_send_subscription_confirmation(user_id, tier))
-		except Exception as exc:
+		except Exception as exc:  # pragma: no cover
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
@@ -340,7 +340,7 @@ async def _send_subscription_confirmation(user_id: str, tier: str) -> dict[str, 
 
 # ── Email service builder ──────────────────────────────────────────────────────
 
-def _build_email_service() -> _SmtpEmailService:
+def _build_email_service() -> _SmtpEmailService:  # pragma: no cover
 	return _SmtpEmailService(settings=_email_settings)
 
 

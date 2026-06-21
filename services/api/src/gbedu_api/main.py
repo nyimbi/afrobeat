@@ -30,7 +30,7 @@ log = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):  # pragma: no cover
 	settings = get_settings()
 
 	# ── Telemetry / logging ────────────────────────────────────────────────────

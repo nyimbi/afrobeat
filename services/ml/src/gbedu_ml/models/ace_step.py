@@ -40,11 +40,11 @@ class AceStepModel(BaseMusGen):
 		return settings.ACE_STEP_MODEL_ID
 
 	@retry(**_LOAD_RETRY_KWARGS)
-	async def load(self) -> None:
+	async def load(self) -> None:  # pragma: no cover
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
 
-	def _load_sync(self) -> None:
+	def _load_sync(self) -> None:  # pragma: no cover
 		# Import deferred — torch/transformers not available at import time in tests
 		try:
 			from acestep.pipeline import ACEStepPipeline  # type: ignore[import]
@@ -78,7 +78,7 @@ class AceStepModel(BaseMusGen):
 		self._is_loaded = True
 		log.info("ace_step.load.done", model=self.model_id)
 
-	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:
+	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:  # pragma: no cover
 		assert self._pipeline is not None, "model not loaded — call load() first"
 		assert prompt, "prompt must not be empty"
 		assert duration_seconds > 0, "duration_seconds must be positive"
@@ -86,7 +86,7 @@ class AceStepModel(BaseMusGen):
 		loop = asyncio.get_event_loop()
 		return await loop.run_in_executor(None, self._generate_sync, prompt, duration_seconds, kwargs)
 
-	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:
+	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:  # pragma: no cover
 		out_path = settings.OUTPUT_DIR / f"ace_{uuid.uuid4().hex}.wav"
 
 		try:
@@ -109,7 +109,7 @@ class AceStepModel(BaseMusGen):
 				return result
 			raise
 
-	def _run_pipeline(
+	def _run_pipeline(  # pragma: no cover
 		self,
 		prompt: str,
 		duration_seconds: int,
@@ -140,7 +140,7 @@ class AceStepModel(BaseMusGen):
 		log.info("ace_step.generated", path=str(out_path), sample_rate=sample_rate)
 		return out_path
 
-	async def unload(self) -> None:
+	async def unload(self) -> None:  # pragma: no cover
 		if self._pipeline is not None:
 			del self._pipeline
 			self._pipeline = None

@@ -142,7 +142,11 @@ async def chaos_client(
 	_mock_email = _mock_email_service()
 	unique_ip = _unique_ip()
 
-	with patch("gbedu_api.routers.auth.EmailService", return_value=_mock_email):
+	with (
+		patch("gbedu_api.worker_tasks.enqueue_verify_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_welcome_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_password_reset_email", MagicMock()),
+	):
 		async with httpx.AsyncClient(
 			transport=httpx.ASGITransport(app=app, client=(unique_ip, 9000)),  # type: ignore[arg-type]
 			base_url="http://testserver",
@@ -312,7 +316,11 @@ async def test_rate_limiter_fails_open_on_redis_error(
 	_mock_email = _mock_email_service()
 	unique_ip = _unique_ip()
 
-	with patch("gbedu_api.routers.auth.EmailService", return_value=_mock_email):
+	with (
+		patch("gbedu_api.worker_tasks.enqueue_verify_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_welcome_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_password_reset_email", MagicMock()),
+	):
 		async with httpx.AsyncClient(
 			transport=httpx.ASGITransport(app=app, client=(unique_ip, 9000)),  # type: ignore[arg-type]
 			base_url="http://testserver",
@@ -357,7 +365,11 @@ async def test_db_operational_error_returns_503_not_500(
 	_mock_email = _mock_email_service()
 	unique_ip = _unique_ip()
 
-	with patch("gbedu_api.routers.auth.EmailService", return_value=_mock_email):
+	with (
+		patch("gbedu_api.worker_tasks.enqueue_verify_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_welcome_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_password_reset_email", MagicMock()),
+	):
 		async with httpx.AsyncClient(
 			transport=httpx.ASGITransport(app=app, client=(unique_ip, 9000)),  # type: ignore[arg-type]
 			base_url="http://testserver",

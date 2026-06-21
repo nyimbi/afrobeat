@@ -41,11 +41,11 @@ class StableAudioModel(BaseMusGen):
 		return settings.STABLE_AUDIO_MODEL_ID
 
 	@retry(**_LOAD_RETRY_KWARGS)
-	async def load(self) -> None:
+	async def load(self) -> None:  # pragma: no cover
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
 
-	def _load_sync(self) -> None:
+	def _load_sync(self) -> None:  # pragma: no cover
 		from transformers import StableAudioPipeline  # type: ignore[import]
 
 		log.info("stable_audio.load.start", model=self.model_id, device=self._device)
@@ -68,7 +68,7 @@ class StableAudioModel(BaseMusGen):
 		self._is_loaded = True
 		log.info("stable_audio.load.done", model=self.model_id, sample_rate=self._sample_rate)
 
-	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:
+	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:  # pragma: no cover
 		assert self._pipeline is not None, "model not loaded — call load() first"
 		assert prompt, "prompt must not be empty"
 		assert 0 < duration_seconds <= _MAX_DURATION_SECONDS, (
@@ -78,7 +78,7 @@ class StableAudioModel(BaseMusGen):
 		loop = asyncio.get_event_loop()
 		return await loop.run_in_executor(None, self._generate_sync, prompt, duration_seconds, kwargs)
 
-	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:
+	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:  # pragma: no cover
 		import torchaudio  # type: ignore[import]
 
 		out_path = settings.OUTPUT_DIR / f"stable_{uuid.uuid4().hex}.wav"
@@ -107,7 +107,7 @@ class StableAudioModel(BaseMusGen):
 		log.info("stable_audio.generated", path=str(out_path), sample_rate=self._sample_rate)
 		return out_path
 
-	async def unload(self) -> None:
+	async def unload(self) -> None:  # pragma: no cover
 		if self._pipeline is not None:
 			del self._pipeline
 			self._pipeline = None

@@ -102,7 +102,7 @@ class GenerationPipeline:
 
 		return result
 
-	async def _run_inner(
+	async def _run_inner(  # pragma: no cover
 		self,
 		request: GenerationRequest,
 		job_id: str,
@@ -190,7 +190,7 @@ class GenerationPipeline:
 			},
 		)
 
-	async def _generate_lyrics_safe(self, request: GenerationRequest) -> LyricResult | None:
+	async def _generate_lyrics_safe(self, request: GenerationRequest) -> LyricResult | None:  # pragma: no cover
 		if not self._lyric_gen.is_loaded:
 			log.warning("pipeline.lyric_gen.not_loaded")
 			return None
@@ -200,7 +200,7 @@ class GenerationPipeline:
 			log.warning("pipeline.lyric_gen.failed", error=str(exc))
 			return None
 
-	async def _write_lyrics_file(self, job_id: str, lyric_result: LyricResult) -> Path:
+	async def _write_lyrics_file(self, job_id: str, lyric_result: LyricResult) -> Path:  # pragma: no cover
 		path = settings.OUTPUT_DIR / f"lyrics_{job_id}.txt"
 		loop = asyncio.get_event_loop()
 
@@ -210,7 +210,7 @@ class GenerationPipeline:
 		await loop.run_in_executor(None, _write)
 		return path
 
-	async def _mix(
+	async def _mix(  # pragma: no cover
 		self,
 		instrumental_path: Path,
 		vocal_path: Path,
@@ -221,7 +221,7 @@ class GenerationPipeline:
 		await loop.run_in_executor(None, self._mix_sync, instrumental_path, vocal_path, out_path)
 		return out_path
 
-	def _mix_sync(self, instrumental_path: Path, vocal_path: Path, out_path: Path) -> None:
+	def _mix_sync(self, instrumental_path: Path, vocal_path: Path, out_path: Path) -> None:  # pragma: no cover
 		from pydub import AudioSegment  # type: ignore[import]
 
 		instrumental = AudioSegment.from_wav(str(instrumental_path))

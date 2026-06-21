@@ -108,6 +108,9 @@ class Track(Base, TimestampMixin, SoftDeleteMixin):
 	play_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 	share_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
+	# Free-form JSONB bag for distribution metadata, remaster URLs, platform IDs, etc.
+	metadata_: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+
 	# ── Relationships ──────────────────────────────────────────────────────────
 	user: Mapped[User] = relationship("User", back_populates="tracks", lazy="noload")
 	generation_job: Mapped[GenerationJob | None] = relationship(

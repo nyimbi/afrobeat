@@ -66,7 +66,7 @@ async def submit_contact(body: ContactRequest) -> dict[str, str]:
 	return {"status": "received"}
 
 
-def _send_smtp(body: ContactRequest) -> None:
+def _send_smtp(body: ContactRequest) -> None:  # pragma: no cover
 	safe_message = body.message.replace("\n", "<br>")
 
 	html = f"""

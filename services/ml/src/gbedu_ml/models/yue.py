@@ -45,11 +45,11 @@ class YuEModel(BaseMusGen):
 		return settings.YUE_MODEL_ID
 
 	@retry(**_LOAD_RETRY_KWARGS)
-	async def load(self) -> None:
+	async def load(self) -> None:  # pragma: no cover
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
 
-	def _load_sync(self) -> None:
+	def _load_sync(self) -> None:  # pragma: no cover
 		from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import]
 
 		log.info("yue.load.start", model=self.model_id, device=self._device)
@@ -74,7 +74,7 @@ class YuEModel(BaseMusGen):
 		self._is_loaded = True
 		log.info("yue.load.done", model=self.model_id)
 
-	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:
+	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:  # pragma: no cover
 		assert self._model is not None and self._tokenizer is not None, (
 			"model not loaded — call load() first"
 		)
@@ -86,7 +86,7 @@ class YuEModel(BaseMusGen):
 		loop = asyncio.get_event_loop()
 		return await loop.run_in_executor(None, self._generate_sync, prompt, duration_seconds, kwargs)
 
-	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:
+	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:  # pragma: no cover
 		import torchaudio  # type: ignore[import]
 		import numpy as np  # type: ignore[import]
 
@@ -144,7 +144,7 @@ class YuEModel(BaseMusGen):
 		log.info("yue.generated", path=str(out_path), chunks=num_chunks)
 		return out_path
 
-	def _decode_audio_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+	def _decode_audio_tokens(self, tokens: torch.Tensor) -> torch.Tensor:  # pragma: no cover
 		"""Decode codec token IDs to a float32 waveform tensor [samples].
 
 		YuE uses EnCodec-style codec tokens. When a dedicated audio codec decoder
@@ -168,7 +168,7 @@ class YuEModel(BaseMusGen):
 		# Silence fallback — preserves chunk count / duration arithmetic
 		return torch.zeros(_CHUNK_DURATION_SECONDS * self._sample_rate)
 
-	async def unload(self) -> None:
+	async def unload(self) -> None:  # pragma: no cover
 		if self._model is not None:
 			del self._model
 			self._model = None

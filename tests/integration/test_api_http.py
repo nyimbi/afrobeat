@@ -94,7 +94,11 @@ async def http_client(
 	n = next(_ip_counter)
 	unique_ip = f"10.{(n >> 8) & 0xFF}.{n & 0xFF}.1"
 
-	with patch("gbedu_api.routers.auth.EmailService", return_value=_mock_email):
+	with (
+		patch("gbedu_api.worker_tasks.enqueue_verify_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_welcome_email", MagicMock()),
+		patch("gbedu_api.worker_tasks.enqueue_password_reset_email", MagicMock()),
+	):
 		async with httpx.AsyncClient(
 			transport=httpx.ASGITransport(app=app, client=(unique_ip, 9000)),  # type: ignore[arg-type]
 			base_url="http://testserver",
@@ -318,19 +322,18 @@ async def test_health_endpoint(http_client: httpx.AsyncClient) -> None:
 # ── 11. Rate limit enforced on login ─────────────────────────────────────────
 
 async def test_rate_limit_enforced_on_login(http_client: httpx.AsyncClient) -> None:
-	"""Fire more than RATE_LIMIT_AUTH (10/minute) login attempts and expect a 429.
+	"""Fire more than RATE_LIMIT_LOGIN (20/minute) login attempts and expect a 429.
 
 	We use a deliberately wrong password so no real logins succeed; we only need
 	to verify the rate limiter fires.  slowapi counts by remote address; the ASGI
-	test transport sends requests from "testclient" which maps to 127.0.0.1 by
-	default — enough to trigger the shared limiter bucket.
+	test transport sends requests from the fixture's unique_ip address.
 
-	The rate limit is 10/minute, so 15 requests guarantees we cross it.
+	The rate limit is 20/minute, so 25 requests guarantees we cross it.
 	"""
 	target_email = f"ratelimit-{uuid7str()}@example.com"
 	got_429 = False
 
-	for _ in range(15):
+	for _ in range(25):
 		resp = await http_client.post(
 			_LOGIN_URL,
 			json={"email": target_email, "password": "badpass"},
@@ -340,6 +343,6 @@ async def test_rate_limit_enforced_on_login(http_client: httpx.AsyncClient) -> N
 			break
 
 	assert got_429, (
-		"Expected a 429 after exceeding 10/minute login rate limit but never received one. "
+		"Expected a 429 after exceeding 20/minute login rate limit but never received one. "
 		"Check that SlowAPIMiddleware is active and the limiter key resolves to a shared IP."
 	)

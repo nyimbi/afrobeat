@@ -18,7 +18,7 @@ from gbedu_core.security import verify_access_token
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
 	from gbedu_api.services.storage_service import StorageClient
 	from gbedu_api.services.ml_client import MLServiceClient
 
@@ -56,7 +56,7 @@ def set_ml_client(c: "MLServiceClient") -> None:
 
 # ── Database ───────────────────────────────────────────────────────────────────
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:  # pragma: no cover
 	async for session in _core_get_db():
 		yield session
 

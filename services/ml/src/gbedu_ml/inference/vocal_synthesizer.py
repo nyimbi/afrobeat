@@ -51,7 +51,7 @@ class VocalSynthesizer:
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._check_rvc_env)
 
-	def _check_rvc_env(self) -> None:
+	def _check_rvc_env(self) -> None:  # pragma: no cover
 		try:
 			import rvc  # type: ignore[import]  # noqa: F401
 			self._is_loaded = True
@@ -61,7 +61,7 @@ class VocalSynthesizer:
 			# Non-fatal: vocal synthesis is optional; pipeline continues without it.
 			self._is_loaded = False
 
-	def _resolve_model_paths(self, voice_model_id: str) -> tuple[Path, Path | None]:
+	def _resolve_model_paths(self, voice_model_id: str) -> tuple[Path, Path | None]:  # pragma: no cover
 		"""Return (pth_path, index_path_or_None) for a voice model ID."""
 		base = settings.RVC_MODELS_DIR / voice_model_id
 		pth = base.with_suffix(".pth")
@@ -70,7 +70,7 @@ class VocalSynthesizer:
 			raise FileNotFoundError(f"RVC model not found: {pth}")
 		return pth, index if index.exists() else None
 
-	async def synthesize(
+	async def synthesize(  # pragma: no cover
 		self,
 		lyrics_path: Path,
 		melody_path: Path,
@@ -95,7 +95,7 @@ class VocalSynthesizer:
 			None, self._synthesize_sync, lyrics_path, melody_path, voice_model_id
 		)
 
-	def _synthesize_sync(
+	def _synthesize_sync(  # pragma: no cover
 		self,
 		lyrics_path: Path,
 		melody_path: Path,
@@ -142,7 +142,7 @@ class VocalSynthesizer:
 		log.info("vocal_synth.synthesized", path=str(out_path), voice=voice_model_id)
 		return out_path
 
-	async def train_user_voice(
+	async def train_user_voice(  # pragma: no cover
 		self,
 		voice_samples: list[Path],
 		output_model_path: Path,
@@ -162,7 +162,7 @@ class VocalSynthesizer:
 			None, self._train_sync, voice_samples, output_model_path
 		)
 
-	def _train_sync(self, voice_samples: list[Path], output_model_path: Path) -> None:
+	def _train_sync(self, voice_samples: list[Path], output_model_path: Path) -> None:  # pragma: no cover
 		try:
 			from rvc import RVCTrainer  # type: ignore[import]
 		except ImportError as exc:

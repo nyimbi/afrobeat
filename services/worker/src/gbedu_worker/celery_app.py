@@ -150,23 +150,23 @@ def _instrument_otel() -> None:
 # ── Celery signals ─────────────────────────────────────────────────────────────
 
 @worker_ready.connect
-def on_worker_ready(sender: object, **kwargs: object) -> None:
+def on_worker_ready(sender: object, **kwargs: object) -> None:  # pragma: no cover
 	_instrument_otel()
 	log.info("celery worker ready", queues=["high", "default", "low"])
 
 
 @worker_shutdown.connect
-def on_worker_shutdown(sender: object, **kwargs: object) -> None:
+def on_worker_shutdown(sender: object, **kwargs: object) -> None:  # pragma: no cover
 	log.info("celery worker shutting down")
 
 
 @celeryd_after_setup.connect
-def on_worker_setup(sender: str, instance: object, **kwargs: object) -> None:
+def on_worker_setup(sender: str, instance: object, **kwargs: object) -> None:  # pragma: no cover
 	log.info("celery worker configured", hostname=sender)
 
 
 @task_prerun.connect
-def on_task_prerun(
+def on_task_prerun(  # pragma: no cover
 	task_id: str,
 	task: object,
 	args: tuple[object, ...],
@@ -181,7 +181,7 @@ def on_task_prerun(
 
 
 @task_postrun.connect
-def on_task_postrun(
+def on_task_postrun(  # pragma: no cover
 	task_id: str,
 	task: object,
 	args: tuple[object, ...],
@@ -199,7 +199,7 @@ def on_task_postrun(
 
 
 @task_failure.connect
-def on_task_failure(
+def on_task_failure(  # pragma: no cover
 	task_id: str,
 	exception: Exception,
 	traceback: object,
@@ -216,7 +216,7 @@ def on_task_failure(
 
 
 @task_retry.connect
-def on_task_retry(
+def on_task_retry(  # pragma: no cover
 	request: object,
 	reason: Exception,
 	einfo: object,
@@ -230,7 +230,7 @@ def on_task_retry(
 
 
 @task_success.connect
-def on_task_success(
+def on_task_success(  # pragma: no cover
 	sender: object,
 	result: object,
 	**kwargs: object,

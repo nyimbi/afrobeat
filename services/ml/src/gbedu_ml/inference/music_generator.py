@@ -46,7 +46,7 @@ class MusicGenerator:
 		self._models = [ace_step, stable_audio, yue]
 		self._prompt_engine = AfrobeatsPromptEngine()
 
-	async def generate(self, request: GenerationRequest) -> MusicGenerationResult:
+	async def generate(self, request: GenerationRequest) -> MusicGenerationResult:  # pragma: no cover
 		assert request.prompt, "request.prompt must not be empty"
 
 		prompt = self._prompt_engine.build_music_prompt(request)

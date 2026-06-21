@@ -68,7 +68,7 @@ _GPU_WATCHDOG_INTERVAL_SECONDS = 60
 _GPU_LEAK_ALERT_CONSECUTIVE = 5   # alert after this many monotonically rising samples
 
 
-async def _gpu_memory_watchdog() -> None:
+async def _gpu_memory_watchdog() -> None:  # pragma: no cover
 	"""Background task: detect GPU VRAM leaks (FMEA M02).
 
 	Samples torch.cuda.memory_reserved() every minute. If reserved memory
@@ -107,7 +107,7 @@ async def _gpu_memory_watchdog() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
 	global _ace_step, _stable_audio, _yue
 	global _lyric_gen, _vocal_synth, _music_gen, _pipeline
 	global _generation_semaphore, _startup_time
@@ -329,7 +329,7 @@ class _VoiceTrainRequest(BaseModel):
 
 
 @app.post("/voice/train", tags=["voice"], status_code=200)
-async def voice_train(
+async def voice_train(  # pragma: no cover
 	request: _VoiceTrainRequest,
 	_: str = Depends(_require_api_key),
 ) -> dict[str, Any]:

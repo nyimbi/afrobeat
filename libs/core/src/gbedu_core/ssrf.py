@@ -73,9 +73,9 @@ def _check_host_directly(host: str) -> None:
 
 	try:
 		ip = ipaddress.ip_address(host)
-		_assert_not_blocked(ip, host)
 	except ValueError:
-		pass  # not a raw IP — DNS resolution will handle it
+		return  # not a raw IP — DNS resolution will handle it
+	_assert_not_blocked(ip, host)
 
 
 def _assert_not_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, url: str) -> None:

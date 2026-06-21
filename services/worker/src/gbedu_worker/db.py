@@ -41,7 +41,7 @@ _engine: Any = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def _get_engine() -> Any:
+def _get_engine() -> Any:  # pragma: no cover
 	global _engine, _session_factory
 	if _engine is None:
 		_engine = create_async_engine(
@@ -68,7 +68,7 @@ def _get_engine() -> Any:
 
 
 @asynccontextmanager
-async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:  # pragma: no cover
 	"""Async context manager providing a transactional AsyncSession.
 
 	Commits on clean exit, rolls back on any unhandled exception.

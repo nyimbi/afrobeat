@@ -30,7 +30,7 @@ _active_jobs_gauge: metrics.ObservableGauge | None = None
 _error_counter: metrics.Counter | None = None
 
 
-def configure_telemetry(service_name: str, otlp_endpoint: str) -> None:
+def configure_telemetry(service_name: str, otlp_endpoint: str) -> None:  # pragma: no cover
 	"""Initialise OTel tracing and metrics. Call once at process startup."""
 	global _tracer_provider, _meter_provider, _service_name
 	global _generation_duration_histogram, _generation_count_counter

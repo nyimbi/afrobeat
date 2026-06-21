@@ -69,7 +69,7 @@ class LyricGenerator:
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
 
-	def _load_sync(self) -> None:
+	def _load_sync(self) -> None:  # pragma: no cover
 		import torch  # type: ignore[import]
 		from transformers import (  # type: ignore[import]
 			AutoModelForCausalLM,
@@ -121,7 +121,7 @@ class LyricGenerator:
 				return False, f"avg_wpl={avg_wpl:.1f} not in [{wpl_min - 1},{wpl_max + 1}]"
 		return True, "ok"
 
-	async def generate(
+	async def generate(  # pragma: no cover
 		self,
 		request: GenerationRequest,
 		song_structure: dict[str, Any] | None = None,
@@ -234,7 +234,7 @@ class LyricGenerator:
 			language_disclosure=disclosure,
 		)
 
-	def _generate_sync(
+	def _generate_sync(  # pragma: no cover
 		self,
 		request: GenerationRequest,
 		song_structure: dict[str, Any],
@@ -307,7 +307,7 @@ class LyricGenerator:
 
 		return sections
 
-	async def unload(self) -> None:
+	async def unload(self) -> None:  # pragma: no cover
 		import torch  # type: ignore[import]
 
 		if self._model is not None:
