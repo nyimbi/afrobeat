@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-
+from typing import Any
 
 # ── Error code constants ───────────────────────────────────────────────────────
 
@@ -42,11 +42,11 @@ class GbeduError(Exception):
 		message: str,
 		*,
 		error_code: str | None = None,
-		details: dict | None = None,
+		details: dict[str, Any] | None = None,
 	) -> None:
 		super().__init__(message)
 		self.message = message
-		self.details: dict = details or {}
+		self.details: dict[str, Any] = details or {}
 		if error_code is not None:
 			self.error_code = error_code
 
@@ -58,7 +58,7 @@ class GbeduError(Exception):
 			f"details={self.details!r})"
 		)
 
-	def to_dict(self) -> dict:
+	def to_dict(self) -> dict[str, Any]:
 		return {
 			"error_code": self.error_code,
 			"message": self.message,
@@ -70,7 +70,9 @@ class ValidationError(GbeduError):
 	error_code = EC_VALIDATION
 	http_status = HTTPStatus.UNPROCESSABLE_ENTITY
 
-	def __init__(self, message: str, *, field: str | None = None, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str, *, field: str | None = None, details: dict[str, Any] | None = None
+	) -> None:
 		d = details or {}
 		if field is not None:
 			d["field"] = field
@@ -81,7 +83,9 @@ class AuthenticationError(GbeduError):
 	error_code = EC_AUTHENTICATION
 	http_status = HTTPStatus.UNAUTHORIZED
 
-	def __init__(self, message: str = "Authentication required", *, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str = "Authentication required", *, details: dict[str, Any] | None = None
+	) -> None:
 		super().__init__(message, details=details)
 
 
@@ -110,7 +114,9 @@ class AuthorizationError(GbeduError):
 	error_code = EC_AUTHORIZATION
 	http_status = HTTPStatus.FORBIDDEN
 
-	def __init__(self, message: str = "Insufficient permissions", *, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str = "Insufficient permissions", *, details: dict[str, Any] | None = None
+	) -> None:
 		super().__init__(message, details=details)
 
 
@@ -129,7 +135,7 @@ class ConflictError(GbeduError):
 	error_code = EC_CONFLICT
 	http_status = HTTPStatus.CONFLICT
 
-	def __init__(self, message: str, *, details: dict | None = None) -> None:
+	def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
 		super().__init__(message, details=details)
 
 
@@ -142,7 +148,7 @@ class RateLimitError(GbeduError):
 		message: str = "Rate limit exceeded",
 		*,
 		retry_after_seconds: int | None = None,
-		details: dict | None = None,
+		details: dict[str, Any] | None = None,
 	) -> None:
 		d = details or {}
 		if retry_after_seconds is not None:
@@ -155,7 +161,9 @@ class PaymentError(GbeduError):
 	error_code = EC_PAYMENT
 	http_status = HTTPStatus.PAYMENT_REQUIRED
 
-	def __init__(self, message: str, *, provider: str | None = None, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str, *, provider: str | None = None, details: dict[str, Any] | None = None
+	) -> None:
 		d = details or {}
 		if provider is not None:
 			d["provider"] = provider
@@ -165,7 +173,9 @@ class PaymentError(GbeduError):
 class PaymentDeclinedError(PaymentError):
 	error_code = EC_PAYMENT_DECLINED
 
-	def __init__(self, message: str = "Payment was declined", *, provider: str | None = None) -> None:
+	def __init__(
+		self, message: str = "Payment was declined", *, provider: str | None = None
+	) -> None:
 		super().__init__(message, provider=provider)
 
 
@@ -181,7 +191,9 @@ class StorageError(GbeduError):
 	error_code = EC_STORAGE
 	http_status = HTTPStatus.INTERNAL_SERVER_ERROR
 
-	def __init__(self, message: str, *, path: str | None = None, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str, *, path: str | None = None, details: dict[str, Any] | None = None
+	) -> None:
 		d = details or {}
 		if path is not None:
 			d["path"] = path
@@ -200,7 +212,9 @@ class MLServiceError(GbeduError):
 	error_code = EC_ML_SERVICE
 	http_status = HTTPStatus.BAD_GATEWAY
 
-	def __init__(self, message: str, *, model: str | None = None, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str, *, model: str | None = None, details: dict[str, Any] | None = None
+	) -> None:
 		d = details or {}
 		if model is not None:
 			d["model"] = model
@@ -218,7 +232,14 @@ class MLServiceTimeoutError(MLServiceError):
 class GenerationError(MLServiceError):
 	error_code = EC_GENERATION
 
-	def __init__(self, message: str, *, model: str | None = None, job_id: str | None = None, details: dict | None = None) -> None:
+	def __init__(
+		self,
+		message: str,
+		*,
+		model: str | None = None,
+		job_id: str | None = None,
+		details: dict[str, Any] | None = None,
+	) -> None:
 		d = details or {}
 		if job_id is not None:
 			d["job_id"] = job_id
@@ -240,7 +261,9 @@ class WorkerError(GbeduError):
 	error_code = EC_WORKER
 	http_status = HTTPStatus.INTERNAL_SERVER_ERROR
 
-	def __init__(self, message: str, *, task_id: str | None = None, details: dict | None = None) -> None:
+	def __init__(
+		self, message: str, *, task_id: str | None = None, details: dict[str, Any] | None = None
+	) -> None:
 		d = details or {}
 		if task_id is not None:
 			d["task_id"] = task_id
@@ -259,7 +282,7 @@ class DatabaseError(GbeduError):
 	error_code = EC_DATABASE
 	http_status = HTTPStatus.INTERNAL_SERVER_ERROR
 
-	def __init__(self, message: str, *, details: dict | None = None) -> None:
+	def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
 		super().__init__(message, details=details)
 
 
@@ -275,7 +298,7 @@ class DatabaseIntegrityError(DatabaseError):
 	http_status = HTTPStatus.CONFLICT
 
 	def __init__(self, message: str, *, constraint: str | None = None) -> None:
-		d: dict = {}
+		d: dict[str, Any] = {}
 		if constraint is not None:
 			d["constraint"] = constraint
 		super().__init__(message, details=d)

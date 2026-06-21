@@ -1,42 +1,38 @@
 """Unit tests for SQLAlchemy model creation, relationships, and mixins."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.models import (
 	BeatListing,
 	BeatPurchase,
-	GenerationJob,
 	JobStatus,
 	Language,
 	ListingStatus,
 	PaymentProvider,
-	PaymentStatus,
 	SubGenre,
 	Subscription,
 	SubscriptionStatus,
 	SubscriptionTier,
-	Track,
 	TrackStatus,
-	User,
 	VoiceArchetype,
 	VoiceModel,
 	VoiceModelStatus,
 )
 from gbedu_core.models.marketplace import LicenseType
 from gbedu_core.models.payment import SubscriptionInterval
-
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
 
 # ── User ───────────────────────────────────────────────────────────────────────
 
-async def test_user_creation(test_db_session: AsyncSession, make_user):
+
+async def test_user_creation(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="free")
 
 	assert user.id
@@ -49,7 +45,7 @@ async def test_user_creation(test_db_session: AsyncSession, make_user):
 	assert user.has_generation_quota is True
 
 
-async def test_user_tier_limits(test_db_session: AsyncSession, make_user):
+async def test_user_tier_limits(test_db_session: AsyncSession, make_user) -> None:
 	free_user = await make_user(tier="free")
 	creator_user = await make_user(tier="creator")
 	pro_user = await make_user(tier="pro")
@@ -61,7 +57,7 @@ async def test_user_tier_limits(test_db_session: AsyncSession, make_user):
 	assert label_user.daily_limit == 500
 
 
-async def test_user_quota_exhausted(test_db_session: AsyncSession, make_user):
+async def test_user_quota_exhausted(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="free")
 	user.generation_count_today = 3
 	test_db_session.add(user)
@@ -70,7 +66,7 @@ async def test_user_quota_exhausted(test_db_session: AsyncSession, make_user):
 	assert user.has_generation_quota is False
 
 
-async def test_user_soft_delete(test_db_session: AsyncSession, make_user):
+async def test_user_soft_delete(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	assert not user.is_deleted
 
@@ -79,7 +75,7 @@ async def test_user_soft_delete(test_db_session: AsyncSession, make_user):
 	assert isinstance(user.deleted_at, datetime)
 
 
-async def test_user_soft_delete_idempotent_raises(test_db_session: AsyncSession, make_user):
+async def test_user_soft_delete_idempotent_raises(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	await user.delete(test_db_session)
 
@@ -87,7 +83,7 @@ async def test_user_soft_delete_idempotent_raises(test_db_session: AsyncSession,
 		await user.delete(test_db_session)
 
 
-async def test_user_timestamps_set(test_db_session: AsyncSession, make_user):
+async def test_user_timestamps_set(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	# Timestamps are set by server_default; after flush they may still be None
 	# in the Python object until a SELECT.  Assert the fields exist.
@@ -97,7 +93,8 @@ async def test_user_timestamps_set(test_db_session: AsyncSession, make_user):
 
 # ── Track ──────────────────────────────────────────────────────────────────────
 
-async def test_track_creation(test_db_session: AsyncSession, make_user, make_track):
+
+async def test_track_creation(test_db_session: AsyncSession, make_user, make_track) -> None:
 	user = await make_user()
 	track = await make_track(user)
 
@@ -110,7 +107,7 @@ async def test_track_creation(test_db_session: AsyncSession, make_user, make_tra
 	assert track.play_count == 0
 
 
-async def test_track_soft_delete(test_db_session: AsyncSession, make_user, make_track):
+async def test_track_soft_delete(test_db_session: AsyncSession, make_user, make_track) -> None:
 	user = await make_user()
 	track = await make_track(user)
 
@@ -119,7 +116,7 @@ async def test_track_soft_delete(test_db_session: AsyncSession, make_user, make_
 	assert track.is_deleted
 
 
-async def test_track_repr(test_db_session: AsyncSession, make_user, make_track):
+async def test_track_repr(test_db_session: AsyncSession, make_user, make_track) -> None:
 	user = await make_user()
 	track = await make_track(user)
 	r = repr(track)
@@ -129,7 +126,8 @@ async def test_track_repr(test_db_session: AsyncSession, make_user, make_track):
 
 # ── GenerationJob ──────────────────────────────────────────────────────────────
 
-async def test_job_creation(test_db_session: AsyncSession, make_user, make_job):
+
+async def test_job_creation(test_db_session: AsyncSession, make_user, make_job) -> None:
 	user = await make_user()
 	job = await make_job(user)
 
@@ -140,7 +138,7 @@ async def test_job_creation(test_db_session: AsyncSession, make_user, make_job):
 	assert not job.is_terminal
 
 
-async def test_job_terminal_states(test_db_session: AsyncSession, make_user, make_job):
+async def test_job_terminal_states(test_db_session: AsyncSession, make_user, make_job) -> None:
 	user = await make_user()
 
 	for terminal in ["complete", "failed", "cancelled"]:
@@ -152,17 +150,20 @@ async def test_job_terminal_states(test_db_session: AsyncSession, make_user, mak
 		assert not job.is_terminal, f"expected {non_terminal} to be non-terminal"
 
 
-async def test_job_duration_none_when_not_started(test_db_session: AsyncSession, make_user, make_job):
+async def test_job_duration_none_when_not_started(
+	test_db_session: AsyncSession, make_user, make_job
+) -> None:
 	user = await make_user()
 	job = await make_job(user)
 	assert job.duration_seconds is None
 
 
-async def test_job_duration_computed(test_db_session: AsyncSession, make_user, make_job):
+async def test_job_duration_computed(test_db_session: AsyncSession, make_user, make_job) -> None:
 	from datetime import timedelta
+
 	user = await make_user()
 	job = await make_job(user)
-	t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+	t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 	job.started_at = t0
 	job.completed_at = t0 + timedelta(seconds=42)
 	assert job.duration_seconds == pytest.approx(42.0)
@@ -170,7 +171,8 @@ async def test_job_duration_computed(test_db_session: AsyncSession, make_user, m
 
 # ── VoiceModel ─────────────────────────────────────────────────────────────────
 
-async def test_voice_model_preset(test_db_session: AsyncSession):
+
+async def test_voice_model_preset(test_db_session: AsyncSession) -> None:
 	vm = VoiceModel(
 		id=uuid7str(),
 		user_id=None,
@@ -189,7 +191,7 @@ async def test_voice_model_preset(test_db_session: AsyncSession):
 	assert vm.status == VoiceModelStatus.ready
 
 
-async def test_voice_model_user_owned(test_db_session: AsyncSession, make_user):
+async def test_voice_model_user_owned(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	vm = VoiceModel(
 		id=uuid7str(),
@@ -210,11 +212,12 @@ async def test_voice_model_user_owned(test_db_session: AsyncSession, make_user):
 
 # ── BeatListing / BeatPurchase ─────────────────────────────────────────────────
 
+
 async def test_beat_listing_creation(
 	test_db_session: AsyncSession,
 	make_user,
 	make_track,
-):
+) -> None:
 	user = await make_user()
 	track = await make_track(user)
 
@@ -239,7 +242,7 @@ async def test_beat_purchase_creation(
 	test_db_session: AsyncSession,
 	make_user,
 	make_track,
-):
+) -> None:
 	seller = await make_user()
 	buyer = await make_user()
 	track = await make_track(seller)
@@ -277,9 +280,10 @@ async def test_beat_purchase_creation(
 
 # ── Subscription ───────────────────────────────────────────────────────────────
 
-async def test_subscription_creation(test_db_session: AsyncSession, make_user):
+
+async def test_subscription_creation(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
-	now = datetime.now(timezone.utc)
+	now = datetime.now(UTC)
 
 	sub = Subscription(
 		id=uuid7str(),

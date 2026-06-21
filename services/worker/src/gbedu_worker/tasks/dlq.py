@@ -13,24 +13,23 @@ The handler is idempotent: if the job is already in a terminal state it logs
 and returns without touching the DB.
 """
 
-import traceback as tb
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from celery import Task
+from gbedu_core.models.job import TERMINAL_JOB_STATUSES, GenerationJob, JobStatus
+from gbedu_core.telemetry import get_tracer
 from sqlalchemy import select
 
-from gbedu_core.models.job import GenerationJob, JobStatus, TERMINAL_JOB_STATUSES
-from gbedu_core.telemetry import get_tracer
-from gbedu_worker.celery_app import app
+from gbedu_worker.celery_app import celery_task
 from gbedu_worker.db import get_async_session, run_async
 
 log = structlog.get_logger(__name__)
 tracer = get_tracer(__name__)
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.dlq.process_dlq_message",
 	# DLQ handler itself must not retry — that would create an infinite loop.
@@ -98,7 +97,8 @@ def process_dlq_message(
 		span.set_attribute("dlq.error_type", error_type)
 		span.set_attribute("dlq.retry_count", retry_count)
 
-		result = run_async(_handle_dlq_message(
+		result = run_async(
+			_handle_dlq_message,
 			job_id=job_id,
 			original_task_id=original_task_id,
 			error_type=error_type,
@@ -106,7 +106,7 @@ def process_dlq_message(
 			error_traceback=error_traceback,
 			retry_count=retry_count,
 			dlq_log=dlq_log,
-		))
+		)
 		return result
 
 
@@ -122,9 +122,7 @@ async def _handle_dlq_message(
 ) -> dict[str, Any]:
 	"""Async body — updates the DB and returns a summary dict."""
 	async with get_async_session() as session:
-		result = await session.execute(
-			select(GenerationJob).where(GenerationJob.id == job_id)
-		)
+		result = await session.execute(select(GenerationJob).where(GenerationJob.id == job_id))
 		job: GenerationJob | None = result.scalar_one_or_none()
 
 		if job is None:
@@ -160,7 +158,7 @@ async def _handle_dlq_message(
 		job.status = JobStatus.failed
 		job.error_message = dlq_reason
 		job.error_traceback = error_traceback
-		job.completed_at = datetime.now(timezone.utc)
+		job.completed_at = datetime.now(UTC)
 		job.celery_task_id = original_task_id
 
 		# session.commit() is called by get_async_session().__aexit__

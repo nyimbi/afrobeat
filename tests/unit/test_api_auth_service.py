@@ -1,26 +1,12 @@
 """Unit tests for AuthService — mocked DB + fakeredis, no real Postgres needed."""
+
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
 import pytest
-from jose import jwt as jose_jwt
-from sqlalchemy.exc import IntegrityError
-
-from gbedu_core.errors import (
-	AuthenticationError,
-	ConflictError,
-	DatabaseIntegrityError,
-	InvalidCredentialsError,
-	NotFoundError,
-	TokenInvalidError,
-)
-from gbedu_core.models.user import SubscriptionTier, SubscriptionStatus, User
-from gbedu_core.security import create_refresh_token, hash_password
-from gbedu_core._uuid7 import uuid7str
 
 # Module under test
 from gbedu_api.services.auth_service import (
@@ -31,12 +17,26 @@ from gbedu_api.services.auth_service import (
 	AuthService,
 	TokenPair,
 )
+from gbedu_core._uuid7 import uuid7str
+from gbedu_core.errors import (
+	AuthenticationError,
+	ConflictError,
+	DatabaseIntegrityError,
+	InvalidCredentialsError,
+	NotFoundError,
+	TokenInvalidError,
+)
+from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier, User
+from gbedu_core.security import create_refresh_token, hash_password
+from jose import jwt as jose_jwt
+from sqlalchemy.exc import IntegrityError
 
 _SECRET = "test-secret-key-not-for-production"
 _ALG = "HS256"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _make_user(
 	*,
@@ -98,7 +98,8 @@ def _make_expired_refresh_token(user_id: str) -> str:
 
 # ── TokenPair ──────────────────────────────────────────────────────────────────
 
-def test_token_pair_attributes():
+
+def test_token_pair_attributes() -> None:
 	pair = TokenPair("acc", "ref")
 	assert pair.access_token == "acc"
 	assert pair.refresh_token == "ref"
@@ -107,7 +108,8 @@ def test_token_pair_attributes():
 
 # ── register ───────────────────────────────────────────────────────────────────
 
-async def test_register_success():
+
+async def test_register_success() -> None:
 	db = _make_db(scalar_result=None)  # no existing user
 	redis = await _make_redis()
 
@@ -124,7 +126,7 @@ async def test_register_success():
 	db.flush.assert_called_once()
 
 
-async def test_register_duplicate_email_raises_conflict():
+async def test_register_duplicate_email_raises_conflict() -> None:
 	existing = _make_user(email="dup@example.com")
 	db = _make_db(scalar_result=existing)
 
@@ -133,7 +135,7 @@ async def test_register_duplicate_email_raises_conflict():
 		await svc.register("dup@example.com", "Password123!", "Dup User")
 
 
-async def test_register_integrity_error_raises_database_integrity_error():
+async def test_register_integrity_error_raises_database_integrity_error() -> None:
 	db = _make_db(scalar_result=None)
 	db.flush.side_effect = IntegrityError("stmt", {}, Exception("unique"))
 
@@ -142,19 +144,19 @@ async def test_register_integrity_error_raises_database_integrity_error():
 		await svc.register("race@example.com", "Password123!", "Race User")
 
 
-async def test_register_empty_email_raises():
+async def test_register_empty_email_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.register("", "Password123!", "User")
 
 
-async def test_register_empty_password_raises():
+async def test_register_empty_password_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.register("a@b.com", "", "User")
 
 
-async def test_register_empty_full_name_raises():
+async def test_register_empty_full_name_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.register("a@b.com", "Password123!", "")
@@ -162,7 +164,8 @@ async def test_register_empty_full_name_raises():
 
 # ── login ──────────────────────────────────────────────────────────────────────
 
-async def test_login_success():
+
+async def test_login_success() -> None:
 	user = _make_user(hashed_pw=hash_password("GoodPass!"))
 	db = _make_db(scalar_result=user)
 
@@ -173,7 +176,7 @@ async def test_login_success():
 	assert isinstance(tokens, TokenPair)
 
 
-async def test_login_wrong_password_raises():
+async def test_login_wrong_password_raises() -> None:
 	user = _make_user(hashed_pw=hash_password("CorrectPass!"))
 	db = _make_db(scalar_result=user)
 
@@ -182,7 +185,7 @@ async def test_login_wrong_password_raises():
 		await svc.login("test@example.com", "WrongPass!")
 
 
-async def test_login_user_not_found_raises():
+async def test_login_user_not_found_raises() -> None:
 	db = _make_db(scalar_result=None)
 
 	svc = AuthService(db, await _make_redis())
@@ -190,7 +193,7 @@ async def test_login_user_not_found_raises():
 		await svc.login("ghost@example.com", "AnyPass!")
 
 
-async def test_login_inactive_user_raises():
+async def test_login_inactive_user_raises() -> None:
 	user = _make_user(is_active=False, hashed_pw=hash_password("GoodPass!"))
 	db = _make_db(scalar_result=user)
 
@@ -199,7 +202,7 @@ async def test_login_inactive_user_raises():
 		await svc.login("test@example.com", "GoodPass!")
 
 
-async def test_login_empty_credentials_raises():
+async def test_login_empty_credentials_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.login("", "pass")
@@ -207,7 +210,8 @@ async def test_login_empty_credentials_raises():
 
 # ── refresh ────────────────────────────────────────────────────────────────────
 
-async def test_refresh_success_rotates_token():
+
+async def test_refresh_success_rotates_token() -> None:
 	user = _make_user()
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -225,7 +229,7 @@ async def test_refresh_success_rotates_token():
 	assert await redis.exists(blocklist_key)
 
 
-async def test_refresh_blocklisted_token_raises_and_revokes_family():
+async def test_refresh_blocklisted_token_raises_and_revokes_family() -> None:
 	user = _make_user()
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -243,7 +247,7 @@ async def test_refresh_blocklisted_token_raises_and_revokes_family():
 	assert await redis.exists(family_key)
 
 
-async def test_refresh_family_revoked_raises():
+async def test_refresh_family_revoked_raises() -> None:
 	user = _make_user()
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -257,7 +261,7 @@ async def test_refresh_family_revoked_raises():
 		await svc.refresh(refresh_token)
 
 
-async def test_refresh_user_not_found_raises():
+async def test_refresh_user_not_found_raises() -> None:
 	db = _make_db(scalar_result=None)
 	redis = await _make_redis()
 	user_id = uuid7str()
@@ -268,7 +272,7 @@ async def test_refresh_user_not_found_raises():
 		await svc.refresh(refresh_token)
 
 
-async def test_refresh_inactive_user_raises():
+async def test_refresh_inactive_user_raises() -> None:
 	user = _make_user(is_active=False)
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -279,7 +283,7 @@ async def test_refresh_inactive_user_raises():
 		await svc.refresh(refresh_token)
 
 
-async def test_refresh_invalid_token_raises():
+async def test_refresh_invalid_token_raises() -> None:
 	db = _make_db(scalar_result=None)
 	redis = await _make_redis()
 
@@ -288,7 +292,7 @@ async def test_refresh_invalid_token_raises():
 		await svc.refresh("not.a.valid.jwt")
 
 
-async def test_refresh_empty_token_raises():
+async def test_refresh_empty_token_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.refresh("")
@@ -296,7 +300,8 @@ async def test_refresh_empty_token_raises():
 
 # ── logout ─────────────────────────────────────────────────────────────────────
 
-async def test_logout_blocklists_token():
+
+async def test_logout_blocklists_token() -> None:
 	user = _make_user()
 	redis = await _make_redis()
 	refresh_token = _make_valid_refresh_token(user.id)
@@ -308,7 +313,7 @@ async def test_logout_blocklists_token():
 	assert await redis.exists(blocklist_key)
 
 
-async def test_logout_expired_token_still_blocklisted():
+async def test_logout_expired_token_still_blocklisted() -> None:
 	user = _make_user()
 	redis = await _make_redis()
 	expired_token = _make_expired_refresh_token(user.id)
@@ -320,7 +325,7 @@ async def test_logout_expired_token_still_blocklisted():
 	assert await redis.exists(blocklist_key)
 
 
-async def test_logout_garbage_token_still_blocklisted():
+async def test_logout_garbage_token_still_blocklisted() -> None:
 	redis = await _make_redis()
 	garbage = "garbage.token.value"
 
@@ -331,7 +336,7 @@ async def test_logout_garbage_token_still_blocklisted():
 	assert await redis.exists(blocklist_key)
 
 
-async def test_logout_empty_token_raises():
+async def test_logout_empty_token_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.logout("")
@@ -339,7 +344,8 @@ async def test_logout_empty_token_raises():
 
 # ── create_email_verification_token ───────────────────────────────────────────
 
-async def test_create_email_verification_token_stores_in_redis():
+
+async def test_create_email_verification_token_stores_in_redis() -> None:
 	redis = await _make_redis()
 	user_id = uuid7str()
 
@@ -353,7 +359,7 @@ async def test_create_email_verification_token_stores_in_redis():
 	assert stored_id == user_id
 
 
-async def test_create_email_verification_token_empty_user_id_raises():
+async def test_create_email_verification_token_empty_user_id_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.create_email_verification_token("")
@@ -361,7 +367,8 @@ async def test_create_email_verification_token_empty_user_id_raises():
 
 # ── verify_email ───────────────────────────────────────────────────────────────
 
-async def test_verify_email_success():
+
+async def test_verify_email_success() -> None:
 	user = _make_user(is_verified=False)
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -377,7 +384,7 @@ async def test_verify_email_success():
 	assert not await redis.exists(f"{_EMAIL_VERIFY_PREFIX}{token}")
 
 
-async def test_verify_email_invalid_token_raises():
+async def test_verify_email_invalid_token_raises() -> None:
 	db = _make_db(scalar_result=None)
 	redis = await _make_redis()
 
@@ -386,7 +393,7 @@ async def test_verify_email_invalid_token_raises():
 		await svc.verify_email("nonexistent-token")
 
 
-async def test_verify_email_user_not_found_raises():
+async def test_verify_email_user_not_found_raises() -> None:
 	redis = await _make_redis()
 	token = "orphan-token"
 	await redis.setex(f"{_EMAIL_VERIFY_PREFIX}{token}", 3600, "missing-user-id")
@@ -397,7 +404,7 @@ async def test_verify_email_user_not_found_raises():
 		await svc.verify_email(token)
 
 
-async def test_verify_email_bytes_user_id_decoded():
+async def test_verify_email_bytes_user_id_decoded() -> None:
 	"""Redis may return bytes; verify_email must decode them correctly."""
 	user = _make_user()
 	user.is_verified = False
@@ -415,7 +422,8 @@ async def test_verify_email_bytes_user_id_decoded():
 
 # ── create_password_reset_token ────────────────────────────────────────────────
 
-async def test_create_password_reset_token_known_email():
+
+async def test_create_password_reset_token_known_email() -> None:
 	user = _make_user()
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -428,7 +436,7 @@ async def test_create_password_reset_token_known_email():
 	assert stored is not None
 
 
-async def test_create_password_reset_token_unknown_email_returns_none():
+async def test_create_password_reset_token_unknown_email_returns_none() -> None:
 	db = _make_db(scalar_result=None)
 	redis = await _make_redis()
 
@@ -440,7 +448,8 @@ async def test_create_password_reset_token_unknown_email_returns_none():
 
 # ── reset_password ─────────────────────────────────────────────────────────────
 
-async def test_reset_password_success():
+
+async def test_reset_password_success() -> None:
 	user = _make_user()
 	db = _make_db(scalar_result=user)
 	redis = await _make_redis()
@@ -453,19 +462,20 @@ async def test_reset_password_success():
 
 	# password updated
 	from gbedu_core.security import verify_password as vp
+
 	assert vp("NewPassword456!", returned_user.hashed_password)
 	# token consumed
 	assert not await redis.exists(f"{_RESET_TOKEN_PREFIX}{token}")
 
 
-async def test_reset_password_invalid_token_raises():
+async def test_reset_password_invalid_token_raises() -> None:
 	redis = await _make_redis()
 	svc = AuthService(AsyncMock(), redis)
 	with pytest.raises(TokenInvalidError):
 		await svc.reset_password("bad-token", "NewPassword456!")
 
 
-async def test_reset_password_user_not_found_raises():
+async def test_reset_password_user_not_found_raises() -> None:
 	redis = await _make_redis()
 	token = "orphan-reset"
 	await redis.setex(f"{_RESET_TOKEN_PREFIX}{token}", 3600, "missing-id")
@@ -476,7 +486,7 @@ async def test_reset_password_user_not_found_raises():
 		await svc.reset_password(token, "NewPassword456!")
 
 
-async def test_reset_password_empty_args_raises():
+async def test_reset_password_empty_args_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.reset_password("", "NewPassword456!")
@@ -486,7 +496,8 @@ async def test_reset_password_empty_args_raises():
 
 # ── oauth_callback ─────────────────────────────────────────────────────────────
 
-async def test_oauth_callback_creates_new_user_when_no_match():
+
+async def test_oauth_callback_creates_new_user_when_no_match() -> None:
 	# Both oauth lookup and email lookup return None → create new user
 	mock_result = MagicMock()
 	mock_result.scalar_one_or_none.side_effect = [None, None]
@@ -511,7 +522,7 @@ async def test_oauth_callback_creates_new_user_when_no_match():
 	assert isinstance(tokens, TokenPair)
 
 
-async def test_oauth_callback_finds_existing_oauth_user():
+async def test_oauth_callback_finds_existing_oauth_user() -> None:
 	existing = _make_user(email="oauth@example.com")
 	existing.oauth_provider = "google"
 	existing.oauth_provider_id = "google-sub-123"
@@ -536,7 +547,7 @@ async def test_oauth_callback_finds_existing_oauth_user():
 	assert isinstance(tokens, TokenPair)
 
 
-async def test_oauth_callback_falls_back_to_email_match():
+async def test_oauth_callback_falls_back_to_email_match() -> None:
 	existing = _make_user(email="preexist@example.com")
 
 	# First execute (oauth lookup) → None; second (email lookup) → existing user
@@ -565,7 +576,7 @@ async def test_oauth_callback_falls_back_to_email_match():
 	assert existing.oauth_provider_id == "new-sub"
 
 
-async def test_oauth_callback_empty_args_raises():
+async def test_oauth_callback_empty_args_raises() -> None:
 	svc = AuthService(AsyncMock(), await _make_redis())
 	with pytest.raises(AssertionError):
 		await svc.oauth_callback(provider="", provider_id="x", email="a@b.com", full_name="X")

@@ -1,24 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from gbedu_core._uuid7 import uuid7str
+from gbedu_core.errors import GbeduError
+from gbedu_core.models.track import Track, TrackStatus
+from gbedu_core.models.user import TIER_DAILY_LIMITS, User
 from pydantic import BaseModel, ConfigDict, Field
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gbedu_api.config import MAX_UPLOAD_SIZE_BYTES, get_settings
-from redis.asyncio import Redis
-
+from gbedu_api.config import MAX_UPLOAD_SIZE_BYTES
 from gbedu_api.deps import get_current_active_user, get_db, get_redis, get_storage
 from gbedu_api.services.storage_service import StorageClient
-from gbedu_core._uuid7 import uuid7str
-from gbedu_core.errors import GbeduError
-from gbedu_core.models.job import GenerationJob, JobStatus
-from gbedu_core.models.track import Track, TrackStatus
-from gbedu_core.models.user import TIER_DAILY_LIMITS, User
 
 log = structlog.get_logger(__name__)
 
@@ -26,6 +24,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class UserProfileResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
@@ -79,6 +78,7 @@ def _profile(user: User) -> UserProfileResponse:
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+
 @router.get(
 	"/me",
 	response_model=UserProfileResponse,
@@ -128,7 +128,10 @@ async def upload_avatar(
 	if file.content_type not in allowed_types:
 		raise HTTPException(
 			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-			detail={"error_code": "VALIDATION_ERROR", "message": "Avatar must be JPEG, PNG, or WebP"},
+			detail={
+				"error_code": "VALIDATION_ERROR",
+				"message": "Avatar must be JPEG, PNG, or WebP",
+			},
 		)
 
 	content = await file.read()

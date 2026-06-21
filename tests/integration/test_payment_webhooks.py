@@ -6,30 +6,27 @@ Uses real DB session (transactional rollback) — no mock DB objects.
 Stripe and Paystack HTTP clients are patched at the point of signature
 verification so no real network calls are made.
 """
+
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.models import (
 	Payment,
 	PaymentProvider,
 	PaymentStatus,
 	Subscription,
-	SubscriptionStatus,
-	SubscriptionTier,
 	User,
 )
 from gbedu_core.models.payment import SubscriptionInterval
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -38,6 +35,7 @@ _PAYSTACK_SECRET_KEY = "sk_test_paystack_secret"
 
 
 # ── Stripe webhook helpers ─────────────────────────────────────────────────────
+
 
 def _stripe_sign(payload: bytes, secret: str, timestamp: int | None = None) -> str:
 	"""Compute Stripe's Stripe-Signature header value."""
@@ -99,6 +97,7 @@ def _stripe_subscription_created_event(
 
 # ── Paystack webhook helpers ───────────────────────────────────────────────────
 
+
 def _paystack_sign(payload: bytes, secret: str) -> str:
 	return hmac.new(secret.encode(), payload, hashlib.sha512).hexdigest()
 
@@ -116,13 +115,14 @@ def _paystack_charge_success_event(reference: str, amount: int = 99900) -> dict:
 				"email": f"customer-{uuid7str()}@example.com",
 				"customer_code": f"CUS_{uuid7str()}",
 			},
-			"paid_at": datetime.now(timezone.utc).isoformat(),
+			"paid_at": datetime.now(UTC).isoformat(),
 			"metadata": {},
 		},
 	}
 
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
+
 
 async def _create_payment(
 	session: AsyncSession,
@@ -160,16 +160,17 @@ async def _get_payment_by_provider_id(
 
 # ── Stripe webhook idempotency ─────────────────────────────────────────────────
 
+
 async def test_stripe_payment_intent_idempotent(
 	test_db_session: AsyncSession,
 	make_user,
-):
+) -> None:
 	"""Processing the same payment_intent.succeeded event twice must only
 	update the payment row once — second call is a no-op."""
 	user = await make_user(tier="creator")
 	pi_id = f"pi_{uuid7str()}"
 
-	payment = await _create_payment(
+	await _create_payment(
 		test_db_session,
 		user,
 		provider_payment_id=pi_id,
@@ -194,7 +195,7 @@ async def test_stripe_payment_intent_idempotent(
 			return False  # already processed — idempotent no-op
 
 		existing.status = PaymentStatus.succeeded
-		existing.paid_at = datetime.now(timezone.utc)
+		existing.paid_at = datetime.now(UTC)
 		session.add(existing)
 		await session.flush()
 		return True
@@ -214,7 +215,7 @@ async def test_stripe_payment_intent_idempotent(
 	assert fetched.paid_at is not None
 
 
-async def test_stripe_webhook_signature_verification():
+async def test_stripe_webhook_signature_verification() -> None:
 	"""Stripe-Signature must be validated before any processing."""
 	payload = json.dumps({"id": "evt_test", "type": "payment_intent.succeeded"}).encode()
 	ts = int(time.time())
@@ -239,7 +240,7 @@ async def test_stripe_webhook_signature_verification():
 async def test_stripe_subscription_creation_idempotent(
 	test_db_session: AsyncSession,
 	make_user,
-):
+) -> None:
 	"""customer.subscription.created must not create duplicate rows."""
 	user = await make_user()
 	sub_id = f"sub_{uuid7str()}"
@@ -256,15 +257,13 @@ async def test_stripe_subscription_creation_idempotent(
 		provider_sub_id = sub_data["id"]
 
 		result = await session.execute(
-			select(Subscription).where(
-				Subscription.provider_subscription_id == provider_sub_id
-			)
+			select(Subscription).where(Subscription.provider_subscription_id == provider_sub_id)
 		)
 		existing = result.scalar_one_or_none()
 		if existing is not None:
 			return False  # idempotent no-op
 
-		now = datetime.now(timezone.utc)
+		datetime.now(UTC)
 		subscription = Subscription(
 			id=uuid7str(),
 			user_id=user_id,
@@ -276,12 +275,8 @@ async def test_stripe_subscription_creation_idempotent(
 			status=sub_data["status"],
 			amount_minor=sub_data["plan"]["amount"],
 			currency=sub_data["plan"]["currency"].upper(),
-			current_period_start=datetime.fromtimestamp(
-				sub_data["current_period_start"], tz=timezone.utc
-			),
-			current_period_end=datetime.fromtimestamp(
-				sub_data["current_period_end"], tz=timezone.utc
-			),
+			current_period_start=datetime.fromtimestamp(sub_data["current_period_start"], tz=UTC),
+			current_period_end=datetime.fromtimestamp(sub_data["current_period_end"], tz=UTC),
 		)
 		session.add(subscription)
 		await session.flush()
@@ -306,15 +301,16 @@ async def test_stripe_subscription_creation_idempotent(
 
 # ── Paystack webhook idempotency ───────────────────────────────────────────────
 
+
 async def test_paystack_charge_success_idempotent(
 	test_db_session: AsyncSession,
 	make_user,
-):
+) -> None:
 	"""charge.success delivered twice must update payment row exactly once."""
 	user = await make_user()
 	reference = f"pstk_{uuid7str()}"
 
-	payment = await _create_payment(
+	await _create_payment(
 		test_db_session,
 		user,
 		provider_payment_id=reference,
@@ -329,9 +325,7 @@ async def test_paystack_charge_success_idempotent(
 		data = event_data["data"]
 		ref = data["reference"]
 
-		result = await session.execute(
-			select(Payment).where(Payment.provider_payment_id == ref)
-		)
+		result = await session.execute(select(Payment).where(Payment.provider_payment_id == ref))
 		existing = result.scalar_one_or_none()
 		if existing is None:
 			return False
@@ -339,7 +333,7 @@ async def test_paystack_charge_success_idempotent(
 			return False  # idempotent no-op
 
 		existing.status = PaymentStatus.succeeded
-		existing.paid_at = datetime.now(timezone.utc)
+		existing.paid_at = datetime.now(UTC)
 		session.add(existing)
 		await session.flush()
 		return True
@@ -355,7 +349,7 @@ async def test_paystack_charge_success_idempotent(
 	assert fetched.paid_at is not None
 
 
-async def test_paystack_webhook_signature_verification():
+async def test_paystack_webhook_signature_verification() -> None:
 	"""Paystack uses HMAC-SHA512 of raw body with secret key."""
 	payload = json.dumps({"event": "charge.success", "data": {}}).encode()
 	valid_sig = _paystack_sign(payload, _PAYSTACK_SECRET_KEY)
@@ -372,9 +366,9 @@ async def test_paystack_webhook_signature_verification():
 async def test_paystack_unknown_event_type_is_no_op(
 	test_db_session: AsyncSession,
 	make_user,
-):
+) -> None:
 	"""Unrecognised event types must not raise — silently ignored."""
-	user = await make_user()
+	await make_user()
 	event = {"event": "transfer.success", "data": {"reference": "unknown_ref"}}
 
 	known_events = {"charge.success", "subscription.create", "subscription.disable"}

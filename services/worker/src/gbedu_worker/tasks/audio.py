@@ -11,12 +11,11 @@ from typing import Any
 
 import structlog
 from celery import Task
-from opentelemetry import trace
-from sqlalchemy import select
-
-from gbedu_core.models.track import Track, TrackStatus
+from gbedu_core.models.track import Track
 from gbedu_core.telemetry import get_tracer, increment_error_count
-from gbedu_worker.celery_app import app
+from opentelemetry import trace
+
+from gbedu_worker.celery_app import celery_task, retry_task
 from gbedu_worker.db import get_async_session, run_async
 from gbedu_worker.storage import R2Client
 
@@ -24,7 +23,7 @@ log = structlog.get_logger(__name__)
 tracer = get_tracer(__name__)
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.audio.process_stems",
 	max_retries=3,
@@ -46,7 +45,7 @@ def process_stems(self: Task, track_id: str) -> dict[str, Any]:
 	with tracer.start_as_current_span("task.process_stems") as span:
 		span.set_attribute("track.id", track_id)
 		try:
-			result = run_async(_do_process_stems(track_id))
+			result = run_async(_do_process_stems, track_id)
 			return result
 		except Exception as exc:
 			task_log.error("process_stems failed", exc_type=type(exc).__name__, exc_msg=str(exc))
@@ -54,12 +53,12 @@ def process_stems(self: Task, track_id: str) -> dict[str, Any]:
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
 			try:
-				raise self.retry(exc=exc, countdown=_jitter_countdown(self.request.retries))
+				retry_task(self, exc=exc, countdown=_jitter_countdown(self.request.retries))
 			except Exception:
 				raise
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.audio.remaster_track",
 	max_retries=3,
@@ -78,14 +77,16 @@ def remaster_track(self: Task, track_id: str, reference_profile: str) -> dict[st
 	"""
 	assert track_id, "track_id must not be empty"
 	assert reference_profile, "reference_profile must not be empty"
-	task_log = log.bind(track_id=track_id, reference_profile=reference_profile, task_id=self.request.id)
+	task_log = log.bind(
+		track_id=track_id, reference_profile=reference_profile, task_id=self.request.id
+	)
 	task_log.info("remaster_track task received")
 
 	with tracer.start_as_current_span("task.remaster_track") as span:
 		span.set_attribute("track.id", track_id)
 		span.set_attribute("audio.reference_profile", reference_profile)
 		try:
-			result = run_async(_do_remaster_track(track_id, reference_profile))
+			result = run_async(_do_remaster_track, track_id, reference_profile)
 			return result
 		except Exception as exc:
 			task_log.error("remaster_track failed", exc_type=type(exc).__name__, exc_msg=str(exc))
@@ -93,12 +94,12 @@ def remaster_track(self: Task, track_id: str, reference_profile: str) -> dict[st
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
 			try:
-				raise self.retry(exc=exc, countdown=_jitter_countdown(self.request.retries))
+				retry_task(self, exc=exc, countdown=_jitter_countdown(self.request.retries))
 			except Exception:
 				raise
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.audio.create_preview",
 	max_retries=3,
@@ -120,7 +121,7 @@ def create_preview(self: Task, track_id: str) -> dict[str, Any]:
 	with tracer.start_as_current_span("task.create_preview") as span:
 		span.set_attribute("track.id", track_id)
 		try:
-			result = run_async(_do_create_preview(track_id))
+			result = run_async(_do_create_preview, track_id)
 			return result
 		except Exception as exc:
 			task_log.error("create_preview failed", exc_type=type(exc).__name__, exc_msg=str(exc))
@@ -128,12 +129,13 @@ def create_preview(self: Task, track_id: str) -> dict[str, Any]:
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
 			try:
-				raise self.retry(exc=exc, countdown=_jitter_countdown(self.request.retries))
+				retry_task(self, exc=exc, countdown=_jitter_countdown(self.request.retries))
 			except Exception:
 				raise
 
 
 # ── Async implementations ──────────────────────────────────────────────────────
+
 
 async def _do_process_stems(track_id: str) -> dict[str, Any]:
 	from gbedu_audio.pipeline import AudioPipeline  # type: ignore[import]
@@ -203,11 +205,19 @@ async def _do_remaster_track(track_id: str, reference_profile: str) -> dict[str,
 		url = await r2.upload(key=key, data=remastered_bytes, content_type="audio/mpeg")
 
 		# Store the remastered URL in metadata so the API can surface it
-		track.metadata_ = {**getattr(track, "metadata_", {}), f"remastered_{reference_profile}_url": url}
+		track.metadata_ = {
+			**getattr(track, "metadata_", {}),
+			f"remastered_{reference_profile}_url": url,
+		}
 		session.add(track)
 
 		log.info("remaster_track: done", track_id=track_id, profile=reference_profile, url=url)
-		return {"status": "complete", "track_id": track_id, "url": url, "profile": reference_profile}
+		return {
+			"status": "complete",
+			"track_id": track_id,
+			"url": url,
+			"profile": reference_profile,
+		}
 
 
 async def _do_create_preview(track_id: str) -> dict[str, Any]:
@@ -249,6 +259,7 @@ async def _do_create_preview(track_id: str) -> dict[str, Any]:
 def _jitter_countdown(retry_num: int) -> int:
 	"""Exponential back-off with modest jitter: 30 / 90 / 270 seconds."""
 	import random
+
 	base = (30, 90, 270)[min(retry_num, 2)]
 	jitter = random.randint(0, max(1, base // 10))
 	return base + jitter

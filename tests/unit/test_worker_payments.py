@@ -3,14 +3,12 @@ from __future__ import annotations
 """Unit tests for gbedu_worker.tasks.payments async helpers."""
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-
 # ── DB session mock helpers ───────────────────────────────────────────────
+
 
 def _make_session(execute_returns: list[Any] | None = None) -> tuple[MagicMock, Any]:
 	"""Build a session mock whose execute() returns scalar_one_or_none() values in order."""
@@ -27,7 +25,9 @@ def _make_session(execute_returns: list[Any] | None = None) -> tuple[MagicMock, 
 		if execute_returns is not None:
 			idx = min(call_idx[0], len(execute_returns) - 1)
 			result.scalar_one_or_none.return_value = execute_returns[idx]
-			result.scalars.return_value.all.return_value = execute_returns[idx] if isinstance(execute_returns[idx], list) else []
+			result.scalars.return_value.all.return_value = (
+				execute_returns[idx] if isinstance(execute_returns[idx], list) else []
+			)
 		else:
 			result.scalar_one_or_none.return_value = None
 			result.scalars.return_value.all.return_value = []
@@ -66,6 +66,7 @@ def _fake_redis() -> MagicMock:
 
 
 # ── _handle_stripe_event ──────────────────────────────────────────────────
+
 
 async def test_stripe_duplicate_event_skipped() -> None:
 	from gbedu_worker.tasks.payments import _handle_stripe_event
@@ -119,7 +120,9 @@ async def test_stripe_subscription_deleted_dispatches() -> None:
 		patch("gbedu_worker.tasks.payments.get_async_session", ctx),
 		patch("gbedu_core.config.StripeSettings", return_value=mock_stripe_cfg),
 	):
-		result = await _handle_stripe_event("evt_del", "customer.subscription.deleted", {"object": obj})
+		result = await _handle_stripe_event(
+			"evt_del", "customer.subscription.deleted", {"object": obj}
+		)
 
 	assert result["status"] == "ok"
 
@@ -143,7 +146,9 @@ async def test_stripe_invoice_payment_succeeded() -> None:
 		patch("gbedu_worker.tasks.payments._mark_processed", AsyncMock()),
 		patch("gbedu_worker.tasks.payments.get_async_session", ctx),
 	):
-		result = await _handle_stripe_event("evt_pay", "invoice.payment_succeeded", {"object": invoice})
+		result = await _handle_stripe_event(
+			"evt_pay", "invoice.payment_succeeded", {"object": invoice}
+		)
 
 	assert result["status"] == "ok"
 
@@ -168,7 +173,9 @@ async def test_stripe_invoice_payment_failed_user_not_found() -> None:
 		patch("gbedu_worker.tasks.payments.get_async_session", ctx),
 	):
 		# Should not raise — just logs warning
-		result = await _handle_stripe_event("evt_fail", "invoice.payment_failed", {"object": invoice})
+		result = await _handle_stripe_event(
+			"evt_fail", "invoice.payment_failed", {"object": invoice}
+		)
 
 	assert result["status"] == "ok"
 
@@ -185,16 +192,19 @@ async def test_stripe_checkout_session_completed_non_subscription_ignored() -> N
 		patch("gbedu_worker.tasks.payments._mark_processed", AsyncMock()),
 		patch("gbedu_worker.tasks.payments.get_async_session", ctx),
 	):
-		result = await _handle_stripe_event("evt_chk", "checkout.session.completed", {"object": checkout_obj})
+		result = await _handle_stripe_event(
+			"evt_chk", "checkout.session.completed", {"object": checkout_obj}
+		)
 
 	assert result["status"] == "ok"
 
 
 # ── _stripe_record_payment: existing payment updated ──────────────────────
 
+
 async def test_stripe_record_payment_updates_existing() -> None:
-	from gbedu_worker.tasks.payments import _stripe_record_payment
 	from gbedu_core.models.payment import PaymentStatus
+	from gbedu_worker.tasks.payments import _stripe_record_payment
 
 	existing_payment = MagicMock()
 	existing_payment.status = PaymentStatus.pending
@@ -213,7 +223,13 @@ async def test_stripe_record_payment_updates_existing() -> None:
 
 	session.execute = _execute
 
-	invoice = {"id": "in_abc", "payment_intent": "pi_xyz", "customer": "cus_abc", "amount_paid": 100, "currency": "usd"}
+	invoice = {
+		"id": "in_abc",
+		"payment_intent": "pi_xyz",
+		"customer": "cus_abc",
+		"amount_paid": 100,
+		"currency": "usd",
+	}
 	await _stripe_record_payment(session, invoice, PaymentStatus.succeeded)
 
 	assert existing_payment.status == PaymentStatus.succeeded
@@ -221,6 +237,7 @@ async def test_stripe_record_payment_updates_existing() -> None:
 
 
 # ── _handle_paystack_event ────────────────────────────────────────────────
+
 
 async def test_paystack_duplicate_event_skipped() -> None:
 	from gbedu_worker.tasks.payments import _handle_paystack_event
@@ -340,11 +357,14 @@ async def test_paystack_subscription_disable() -> None:
 
 # ── helper functions ───────────────────────────────────────────────────────
 
-def test_stripe_plan_to_tier_fallback() -> None:
-	from gbedu_worker.tasks.payments import _stripe_plan_to_tier
-	from gbedu_core.models.user import SubscriptionTier
 
-	mock_cfg = MagicMock(price_id_creator="price_a", price_id_pro="price_b", price_id_label="price_c")
+def test_stripe_plan_to_tier_fallback() -> None:
+	from gbedu_core.models.user import SubscriptionTier
+	from gbedu_worker.tasks.payments import _stripe_plan_to_tier
+
+	mock_cfg = MagicMock(
+		price_id_creator="price_a", price_id_pro="price_b", price_id_label="price_c"
+	)
 	with patch("gbedu_core.config.StripeSettings", return_value=mock_cfg):
 		tier = _stripe_plan_to_tier({"metadata": {"tier": "pro"}, "plan": {}})
 
@@ -352,10 +372,12 @@ def test_stripe_plan_to_tier_fallback() -> None:
 
 
 def test_stripe_plan_to_tier_unknown_falls_back_to_creator() -> None:
-	from gbedu_worker.tasks.payments import _stripe_plan_to_tier
 	from gbedu_core.models.user import SubscriptionTier
+	from gbedu_worker.tasks.payments import _stripe_plan_to_tier
 
-	mock_cfg = MagicMock(price_id_creator="price_a", price_id_pro="price_b", price_id_label="price_c")
+	mock_cfg = MagicMock(
+		price_id_creator="price_a", price_id_pro="price_b", price_id_label="price_c"
+	)
 	with patch("gbedu_core.config.StripeSettings", return_value=mock_cfg):
 		tier = _stripe_plan_to_tier({"metadata": {}, "plan": {}})
 
@@ -363,8 +385,8 @@ def test_stripe_plan_to_tier_unknown_falls_back_to_creator() -> None:
 
 
 def test_paystack_plan_to_tier_keyword_match() -> None:
-	from gbedu_worker.tasks.payments import _paystack_plan_to_tier
 	from gbedu_core.models.user import SubscriptionTier
+	from gbedu_worker.tasks.payments import _paystack_plan_to_tier
 
 	assert _paystack_plan_to_tier("PLN_pro_monthly") == SubscriptionTier.pro
 	assert _paystack_plan_to_tier("PLN_label_annual") == SubscriptionTier.label
@@ -372,8 +394,8 @@ def test_paystack_plan_to_tier_keyword_match() -> None:
 
 
 def test_stripe_interval_year() -> None:
-	from gbedu_worker.tasks.payments import _stripe_interval
 	from gbedu_core.models.payment import SubscriptionInterval
+	from gbedu_worker.tasks.payments import _stripe_interval
 
 	assert _stripe_interval({"plan": {"interval": "year"}}) == SubscriptionInterval.year
 	assert _stripe_interval({"plan": {"interval": "month"}}) == SubscriptionInterval.month
@@ -400,7 +422,7 @@ def test_paystack_next_billing_fallback() -> None:
 	from gbedu_worker.tasks.payments import _paystack_next_billing
 
 	result = _paystack_next_billing({})
-	assert result > datetime.now(timezone.utc)
+	assert result > datetime.now(UTC)
 
 
 def test_paystack_next_billing_from_date_string() -> None:

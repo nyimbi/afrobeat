@@ -2,16 +2,15 @@ from __future__ import annotations
 
 """Unit tests for gbedu_core.ssrf — SSRF URL validation."""
 
+import ipaddress
 import socket
 from unittest.mock import patch
 
 import pytest
-
-from gbedu_core.ssrf import validate_no_ssrf, _check_host_directly, _assert_not_blocked
-import ipaddress
-
+from gbedu_core.ssrf import _assert_not_blocked, _check_host_directly, validate_no_ssrf
 
 # ── validate_no_ssrf ──────────────────────────────────────────────────────────
+
 
 def test_public_url_passes() -> None:
 	with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("8.8.8.8", 443))]):
@@ -56,7 +55,9 @@ def test_rfc1918_10_rejected() -> None:
 
 
 def test_rfc1918_192168_rejected() -> None:
-	with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.100", 80))]):
+	with patch(
+		"socket.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.100", 80))]
+	):
 		with pytest.raises(ValueError, match="blocked"):
 			validate_no_ssrf("http://router.local/")
 
@@ -68,7 +69,9 @@ def test_rfc1918_172_rejected() -> None:
 
 
 def test_aws_metadata_rejected() -> None:
-	with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("169.254.169.254", 80))]):
+	with patch(
+		"socket.getaddrinfo", return_value=[(None, None, None, None, ("169.254.169.254", 80))]
+	):
 		with pytest.raises(ValueError, match="blocked"):
 			validate_no_ssrf("http://metadata.link/iam/token")
 
@@ -102,11 +105,14 @@ def test_direct_private_ip_rejected() -> None:
 
 
 def test_http_scheme_allowed() -> None:
-	with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 80))]):
+	with patch(
+		"socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 80))]
+	):
 		validate_no_ssrf("http://example.com/page")
 
 
 # ── _check_host_directly ──────────────────────────────────────────────────────
+
 
 def test_check_host_localhost_raises() -> None:
 	with pytest.raises(ValueError, match="loopback"):
@@ -137,6 +143,7 @@ def test_check_host_domain_passes() -> None:
 
 
 # ── _assert_not_blocked ───────────────────────────────────────────────────────
+
 
 def test_assert_not_blocked_public_passes() -> None:
 	ip = ipaddress.ip_address("8.8.8.8")

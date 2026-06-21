@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Never
+
 """Unit tests for gbedu_worker.db — run_async() is pure Python, fully testable."""
 
 
@@ -17,7 +19,7 @@ def test_run_async_propagates_exception() -> None:
 	import pytest
 	from gbedu_worker.db import run_async
 
-	async def _failing():
+	async def _failing() -> Never:
 		raise ValueError("boom")
 
 	with pytest.raises(ValueError, match="boom"):
@@ -27,6 +29,7 @@ def test_run_async_propagates_exception() -> None:
 def test_run_async_cancels_pending_tasks() -> None:
 	"""run_async must cancel any dangling tasks before closing the loop."""
 	import asyncio
+
 	from gbedu_worker.db import run_async
 
 	async def _with_dangling() -> str:
@@ -49,6 +52,7 @@ def test_run_async_works_with_no_pending_tasks() -> None:
 def test_run_async_closes_loop_on_exception() -> None:
 	"""Loop must be closed even when the coroutine raises."""
 	import asyncio
+
 	import pytest
 	from gbedu_worker.db import run_async
 

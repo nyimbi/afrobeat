@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
 from gbedu_core.models.track import Language
 from gbedu_core.schemas import GenerationRequest
+from pydantic import BaseModel, ConfigDict, Field
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
 from gbedu_ml.config import settings
-from gbedu_ml.language.quality_gate import PidginYorubaQualityGate
+from gbedu_ml.language.quality_gate import PidginYorubaQualityGate, QualityGateResult
 from gbedu_ml.prompts.afrobeats import AfrobeatsPromptEngine, CorpusTarget, get_target
 
 log = structlog.get_logger(__name__)
@@ -21,12 +22,17 @@ _SECTION_PATTERN = re.compile(
 	re.IGNORECASE,
 )
 
-_LOAD_RETRY_KWARGS = dict(
-	stop=stop_after_attempt(3),
-	wait=wait_exponential(multiplier=1, min=2, max=10),
-	retry=retry_if_exception_type((OSError, RuntimeError)),
-	reraise=True,
-)
+_LOAD_RETRY_KWARGS = {
+	"stop": stop_after_attempt(3),
+	"wait": wait_exponential(multiplier=1, min=2, max=10),
+	"retry": retry_if_exception_type((OSError, RuntimeError)),
+	"reraise": True,
+}
+
+
+def _load_retry[F: Callable[..., Any]](func: F) -> F:
+	retry_factory = cast(Any, retry)
+	return cast(F, retry_factory(**_LOAD_RETRY_KWARGS)(func))
 
 
 class LyricResult(BaseModel):
@@ -64,7 +70,7 @@ class LyricGenerator:
 	def is_loaded(self) -> bool:
 		return self._is_loaded
 
-	@retry(**_LOAD_RETRY_KWARGS)
+	@_load_retry
 	async def load(self) -> None:
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
@@ -79,12 +85,13 @@ class LyricGenerator:
 
 		log.info("lyric_gen.load.start", model=settings.LLAMA_MODEL_ID)
 
-		self._tokenizer = AutoTokenizer.from_pretrained(
+		self._tokenizer = cast(Any, AutoTokenizer).from_pretrained(
 			settings.LLAMA_MODEL_ID,
 			cache_dir=str(settings.MODEL_CACHE_DIR),
 			token=settings.HF_TOKEN,
 		)
-		self._tokenizer.pad_token = self._tokenizer.eos_token
+		tokenizer = self._tokenizer
+		tokenizer.pad_token = tokenizer.eos_token
 
 		bnb_config = BitsAndBytesConfig(
 			load_in_4bit=True,
@@ -93,7 +100,7 @@ class LyricGenerator:
 			bnb_4bit_use_double_quant=True,
 		)
 
-		self._model = AutoModelForCausalLM.from_pretrained(
+		self._model = cast(Any, AutoModelForCausalLM).from_pretrained(
 			settings.LLAMA_MODEL_ID,
 			cache_dir=str(settings.MODEL_CACHE_DIR),
 			quantization_config=bnb_config,
@@ -107,10 +114,7 @@ class LyricGenerator:
 
 	def _validate_structure(self, raw: str, target: CorpusTarget) -> tuple[bool, str]:
 		"""Check generated lyrics meet corpus structural targets for line count and density."""
-		lines = [
-			l for l in raw.splitlines()
-			if l.strip() and not _SECTION_PATTERN.match(l.strip())
-		]
+		lines = [l for l in raw.splitlines() if l.strip() and not _SECTION_PATTERN.match(l.strip())]
 		line_count = len(lines)
 		if not (target.min_lines <= line_count <= target.max_lines):
 			return False, f"line_count={line_count} not in [{target.min_lines},{target.max_lines}]"
@@ -164,44 +168,42 @@ class LyricGenerator:
 		fell_back = False
 		disclosure: str | None = None
 
-		_gate_checks: dict[Language, tuple] = {
+		_gate_checks: dict[Language, tuple[Callable[[str], QualityGateResult], str]] = {
 			Language.pidgin: (
 				self._quality_gate.check_pidgin,
-				{"marker_rate": None},
 				"marker_rate",
 			),
 			Language.yoruba: (
 				self._quality_gate.check_yoruba,
-				{"char_density": None},
 				"char_density",
 			),
 			Language.swahili: (
 				self._quality_gate.check_swahili,
-				{"marker_rate": None},
 				"marker_rate",
 			),
 			Language.lingala: (
 				self._quality_gate.check_lingala,
-				{"marker_rate": None},
 				"marker_rate",
 			),
 			Language.zulu: (
 				self._quality_gate.check_zulu,
-				{"marker_rate": None},
 				"marker_rate",
 			),
 			Language.twi: (
 				self._quality_gate.check_twi,
-				{"char_density": None},
 				"char_density",
 			),
 		}
 
 		if request.language in _gate_checks:
-			check_fn, extra_log_keys, metric_key = _gate_checks[request.language]
+			check_fn, metric_key = _gate_checks[request.language]
 			gate_result = check_fn(raw_lyrics)
 			if not gate_result.passed:
-				metric_val = getattr(gate_result, metric_key)
+				metric_val = (
+					gate_result.marker_rate
+					if metric_key == "marker_rate"
+					else gate_result.char_density
+				)
 				log.warning(
 					"lyric.language_fallback",
 					requested=request.language.value,
@@ -274,7 +276,7 @@ class LyricGenerator:
 			)
 
 		# Strip the prompt tokens — only decode newly generated tokens
-		new_tokens = output_ids[0, input_ids.shape[1]:]
+		new_tokens = output_ids[0, input_ids.shape[1] :]
 		return self._tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 	def _parse_sections(self, raw: str) -> dict[str, str]:

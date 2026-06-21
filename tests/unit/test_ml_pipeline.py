@@ -4,19 +4,20 @@ Tests the fallback chain, circuit breaker integration, prompt generation,
 and error handling without loading real model weights.  All heavy ML
 dependencies (torch, transformers, torchaudio) are stubbed at import time.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Never
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from gbedu_core.errors import GenerationError
 from gbedu_core.models.track import Language, SubGenre
 from gbedu_core.schemas import GenerationRequest
 
-
 # ── Shared fixtures ────────────────────────────────────────────────────────────
+
 
 def _make_request(
 	prompt: str = "energetic afrobeats Lagos night",
@@ -45,6 +46,7 @@ def _mock_model(model_id: str, is_loaded: bool = True, circuit_open: bool = Fals
 
 
 # ── MusicGenerator fallback chain ─────────────────────────────────────────────
+
 
 async def test_music_generator_uses_first_loaded_model() -> None:
 	"""generate() must use the first loaded model in the chain."""
@@ -127,12 +129,15 @@ async def test_music_generator_result_carries_duration() -> None:
 	from gbedu_ml.inference.music_generator import MusicGenerator
 
 	ace = _mock_model("ace-step", is_loaded=True)
-	gen = MusicGenerator(ace_step=ace, stable_audio=_mock_model("s", False), yue=_mock_model("y", False))
+	gen = MusicGenerator(
+		ace_step=ace, stable_audio=_mock_model("s", False), yue=_mock_model("y", False)
+	)
 	result = await gen.generate(_make_request(duration_seconds=90))
 	assert result.duration_seconds == 90
 
 
 # ── AfrobeatsPromptEngine ──────────────────────────────────────────────────────
+
 
 def test_prompt_engine_returns_string() -> None:
 	"""build_music_prompt must return a non-empty string for any valid request."""
@@ -182,6 +187,7 @@ def test_prompt_engine_all_languages() -> None:
 
 # ── VocalSynthesizer graceful degradation ─────────────────────────────────────
 
+
 async def test_vocal_synthesizer_degrades_gracefully_without_rvc() -> None:
 	"""VocalSynthesizer.load() must not raise even if rvc is absent."""
 	from gbedu_ml.inference.vocal_synthesizer import VocalSynthesizer
@@ -214,13 +220,14 @@ async def test_vocal_synthesizer_skips_synthesis_when_not_loaded() -> None:
 
 # ── GenerationPipeline timeout handling ───────────────────────────────────────
 
+
 async def test_pipeline_raises_on_timeout() -> None:
 	"""GenerationPipeline must raise GenerationError when timeout is exceeded."""
 	import asyncio
 
 	from gbedu_ml.pipeline import GenerationPipeline
 
-	async def _slow_generate(*args, **kwargs):  # type: ignore[no-untyped-def]
+	async def _slow_generate(*args, **kwargs) -> Never:  # type: ignore[no-untyped-def]
 		await asyncio.sleep(9999)
 		raise AssertionError("Should have timed out")
 
@@ -246,6 +253,7 @@ async def test_pipeline_raises_on_timeout() -> None:
 
 
 # ── Config validation ──────────────────────────────────────────────────────────
+
 
 def test_ml_settings_inference_timeout_positive() -> None:
 	"""GENERATION_TIMEOUT_SECONDS must be a positive value."""

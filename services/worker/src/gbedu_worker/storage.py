@@ -3,12 +3,12 @@ from __future__ import annotations
 """Cloudflare R2 upload client used by generation and audio tasks."""
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import structlog
+from gbedu_core.config import StorageSettings
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from gbedu_core.config import StorageSettings
 from gbedu_worker.exceptions import UploadError
 
 log = structlog.get_logger(__name__)
@@ -22,7 +22,8 @@ class R2Client:
 
 	def _make_client(self) -> Any:
 		import boto3
-		return boto3.client(
+
+		return cast(Any, boto3).client(
 			"s3",
 			endpoint_url=self._settings.r2_endpoint_url,
 			aws_access_key_id=self._settings.r2_access_key_id,

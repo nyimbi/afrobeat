@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -14,7 +14,11 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 	"""Generate a UUID4 per request and attach it to both the request state
 	and the response header so callers can correlate logs to responses."""
 
-	async def dispatch(self, request: Request, call_next: Callable) -> Response:
+	async def dispatch(
+		self,
+		request: Request,
+		call_next: Callable[[Request], Awaitable[Response]],
+	) -> Response:
 		request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
 		request.state.request_id = request_id
 

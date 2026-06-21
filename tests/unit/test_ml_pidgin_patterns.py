@@ -2,15 +2,15 @@ from __future__ import annotations
 
 """Unit tests for gbedu_ml.language.pidgin_patterns."""
 
-import pytest
-
 
 def _lib():
 	from gbedu_ml.language.pidgin_patterns import PidginPatternLibrary
+
 	return PidginPatternLibrary()
 
 
 # ── PidginPatternLibrary ──────────────────────────────────────────────────
+
 
 def test_all_themes_returns_list() -> None:
 	lib = _lib()
@@ -78,8 +78,10 @@ def test_format_few_shot_block_with_themes() -> None:
 
 # ── PidginPhrase ──────────────────────────────────────────────────────────
 
+
 def test_pidgin_phrase_is_namedtuple() -> None:
 	from gbedu_ml.language.pidgin_patterns import PidginPhrase
+
 	p = PidginPhrase(pidgin="Na me", english_gloss="It is me", theme="identity")
 	assert p.pidgin == "Na me"
 	assert p.english_gloss == "It is me"

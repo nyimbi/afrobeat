@@ -12,11 +12,11 @@ from gbedu_core._uuid7 import uuid7str
 from gbedu_core.db import Base, TimestampMixin
 
 if TYPE_CHECKING:
-	from gbedu_core.models.user import User
 	from gbedu_core.models.track import Track
+	from gbedu_core.models.user import User
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(enum.StrEnum):
 	queued = "queued"
 	ml_generating = "ml_generating"
 	audio_processing = "audio_processing"
@@ -27,11 +27,13 @@ class JobStatus(str, enum.Enum):
 
 
 # Terminal states — a job in these states will never transition again
-TERMINAL_JOB_STATUSES: frozenset[JobStatus] = frozenset({
-	JobStatus.complete,
-	JobStatus.failed,
-	JobStatus.cancelled,
-})
+TERMINAL_JOB_STATUSES: frozenset[JobStatus] = frozenset(
+	{
+		JobStatus.complete,
+		JobStatus.failed,
+		JobStatus.cancelled,
+	}
+)
 
 
 class GenerationJob(Base, TimestampMixin):
@@ -63,7 +65,9 @@ class GenerationJob(Base, TimestampMixin):
 	started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 	completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-	progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+	progress_percent: Mapped[int] = mapped_column(
+		Integer, nullable=False, default=0, server_default="0"
+	)
 
 	# Arbitrary extra info — model params, seed, latency breakdown, etc.
 	metadata_: Mapped[dict[str, Any]] = mapped_column(

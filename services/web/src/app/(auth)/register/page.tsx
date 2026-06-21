@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { signIn } from "next-auth/react"
@@ -36,12 +36,12 @@ export default function RegisterPage() {
 
 	const {
 		register,
+		control,
 		handleSubmit,
-		watch,
 		formState: { errors, isSubmitting },
 	} = useForm<RegisterFormData>({ resolver: zodResolver(registerSchema) })
 
-	const password = watch("password", "")
+	const password = useWatch({ control, name: "password", defaultValue: "" })
 
 	const passwordStrength = (() => {
 		if (password.length === 0) return null

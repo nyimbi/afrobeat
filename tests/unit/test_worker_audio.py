@@ -6,10 +6,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-
 # ── session mock ──────────────────────────────────────────────────────────
+
 
 def _make_session(get_return: Any = None) -> tuple[MagicMock, Any]:
 	session = MagicMock()
@@ -44,6 +42,7 @@ def _make_track(
 
 # ── _do_process_stems ─────────────────────────────────────────────────────
 
+
 async def test_process_stems_track_not_found() -> None:
 	from gbedu_worker.tasks.audio import _do_process_stems
 
@@ -69,8 +68,9 @@ async def test_process_stems_already_done() -> None:
 
 
 async def test_process_stems_happy_path() -> None:
-	from gbedu_worker.tasks.audio import _do_process_stems
 	import sys
+
+	from gbedu_worker.tasks.audio import _do_process_stems
 
 	track = _make_track(stem_urls=None)
 	session, ctx = _make_session(track)
@@ -96,7 +96,10 @@ async def test_process_stems_happy_path() -> None:
 		patch("gbedu_worker.tasks.audio.get_async_session", ctx),
 		patch("gbedu_worker.tasks.audio.R2Client", return_value=mock_r2),
 		patch("asyncio.get_event_loop", return_value=mock_loop),
-		patch.dict(sys.modules, {"gbedu_audio": gbedu_audio_mod, "gbedu_audio.pipeline": gbedu_audio_pipeline_mod}),
+		patch.dict(
+			sys.modules,
+			{"gbedu_audio": gbedu_audio_mod, "gbedu_audio.pipeline": gbedu_audio_pipeline_mod},
+		),
 	):
 		result = await _do_process_stems("track-1")
 
@@ -106,6 +109,7 @@ async def test_process_stems_happy_path() -> None:
 
 
 # ── _do_remaster_track ────────────────────────────────────────────────────
+
 
 async def test_remaster_track_not_found() -> None:
 	from gbedu_worker.tasks.audio import _do_remaster_track
@@ -119,8 +123,9 @@ async def test_remaster_track_not_found() -> None:
 
 
 async def test_remaster_track_happy_path() -> None:
-	from gbedu_worker.tasks.audio import _do_remaster_track
 	import sys
+
+	from gbedu_worker.tasks.audio import _do_remaster_track
 
 	track = _make_track()
 	session, ctx = _make_session(track)
@@ -146,7 +151,10 @@ async def test_remaster_track_happy_path() -> None:
 		patch("gbedu_worker.tasks.audio.get_async_session", ctx),
 		patch("gbedu_worker.tasks.audio.R2Client", return_value=mock_r2),
 		patch("asyncio.get_event_loop", return_value=mock_loop),
-		patch.dict(sys.modules, {"gbedu_audio": gbedu_audio_mod, "gbedu_audio.pipeline": gbedu_audio_pipeline_mod}),
+		patch.dict(
+			sys.modules,
+			{"gbedu_audio": gbedu_audio_mod, "gbedu_audio.pipeline": gbedu_audio_pipeline_mod},
+		),
 	):
 		result = await _do_remaster_track("track-1", "afropop_radio")
 
@@ -156,6 +164,7 @@ async def test_remaster_track_happy_path() -> None:
 
 
 # ── _do_create_preview ────────────────────────────────────────────────────
+
 
 async def test_create_preview_track_not_found() -> None:
 	from gbedu_worker.tasks.audio import _do_create_preview
@@ -169,8 +178,9 @@ async def test_create_preview_track_not_found() -> None:
 
 
 async def test_create_preview_happy_path() -> None:
-	from gbedu_worker.tasks.audio import _do_create_preview
 	import sys
+
+	from gbedu_worker.tasks.audio import _do_create_preview
 
 	track = _make_track()
 	session, ctx = _make_session(track)
@@ -196,7 +206,10 @@ async def test_create_preview_happy_path() -> None:
 		patch("gbedu_worker.tasks.audio.get_async_session", ctx),
 		patch("gbedu_worker.tasks.audio.R2Client", return_value=mock_r2),
 		patch("asyncio.get_event_loop", return_value=mock_loop),
-		patch.dict(sys.modules, {"gbedu_audio": gbedu_audio_mod, "gbedu_audio.pipeline": gbedu_audio_pipeline_mod}),
+		patch.dict(
+			sys.modules,
+			{"gbedu_audio": gbedu_audio_mod, "gbedu_audio.pipeline": gbedu_audio_pipeline_mod},
+		),
 	):
 		result = await _do_create_preview("track-1")
 
@@ -206,6 +219,7 @@ async def test_create_preview_happy_path() -> None:
 
 
 # ── _jitter_countdown ─────────────────────────────────────────────────────
+
 
 def test_jitter_countdown_ranges() -> None:
 	from gbedu_worker.tasks.audio import _jitter_countdown

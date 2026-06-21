@@ -9,19 +9,16 @@ The MLServiceClient circuit breaker config is also verified against the values
 declared in ``MLSettings``.
 """
 
-import asyncio
 import time
-from typing import Any
 
 import pytest
 from circuitbreaker import CircuitBreaker, CircuitBreakerError
-
 from gbedu_core.config import MLSettings
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _Sentinel(Exception):
 	"""Dummy exception used as the expected_exception for test circuits."""
@@ -38,6 +35,7 @@ def _make_circuit(
 	returning a previously-opened circuit when tests share the same name.
 	"""
 	import uuid
+
 	cb_name = name or f"test_cb_{uuid.uuid4().hex[:8]}"
 	return CircuitBreaker(
 		failure_threshold=failure_threshold,
@@ -49,6 +47,7 @@ def _make_circuit(
 
 def _failing_call(cb: CircuitBreaker) -> None:
 	"""Invoke the circuit breaker with a function that always raises _Sentinel."""
+
 	@cb
 	def _inner() -> None:
 		raise _Sentinel("deliberate failure")
@@ -58,6 +57,7 @@ def _failing_call(cb: CircuitBreaker) -> None:
 
 def _succeeding_call(cb: CircuitBreaker) -> str:
 	"""Invoke the circuit breaker with a function that always succeeds."""
+
 	@cb
 	def _inner() -> str:
 		return "ok"
@@ -68,6 +68,7 @@ def _succeeding_call(cb: CircuitBreaker) -> str:
 # ---------------------------------------------------------------------------
 # 1. Circuit opens after failure_threshold consecutive failures
 # ---------------------------------------------------------------------------
+
 
 def test_circuit_opens_after_threshold() -> None:
 	"""Circuit must transition CLOSED → OPEN after exactly failure_threshold failures."""
@@ -91,6 +92,7 @@ def test_circuit_opens_after_threshold() -> None:
 # ---------------------------------------------------------------------------
 # 2. Circuit rejects calls when open (raises CircuitBreakerError immediately)
 # ---------------------------------------------------------------------------
+
 
 def test_open_circuit_rejects_calls() -> None:
 	"""Once open the circuit must raise CircuitBreakerError without calling the wrapped fn."""
@@ -122,6 +124,7 @@ def test_open_circuit_rejects_calls() -> None:
 # 3. Circuit rejects multiple consecutive calls when open
 # ---------------------------------------------------------------------------
 
+
 def test_open_circuit_rejects_all_subsequent_calls() -> None:
 	"""Every call while the circuit is open must raise CircuitBreakerError."""
 	cb = _make_circuit(failure_threshold=2)
@@ -140,6 +143,7 @@ def test_open_circuit_rejects_all_subsequent_calls() -> None:
 # ---------------------------------------------------------------------------
 # 4. Circuit recovers to HALF-OPEN after recovery_timeout, then CLOSED on success
 # ---------------------------------------------------------------------------
+
 
 def test_circuit_recovers_after_timeout() -> None:
 	"""Circuit must allow a probe call after recovery_timeout and close on success."""
@@ -168,6 +172,7 @@ def test_circuit_recovers_after_timeout() -> None:
 # 5. Circuit re-opens if probe fails during HALF-OPEN
 # ---------------------------------------------------------------------------
 
+
 def test_circuit_reopens_on_failed_probe() -> None:
 	"""A failed probe during HALF-OPEN must re-open the circuit."""
 	threshold = 2
@@ -192,9 +197,10 @@ def test_circuit_reopens_on_failed_probe() -> None:
 # 6. MLServiceClient circuit breaker config matches MLSettings
 # ---------------------------------------------------------------------------
 
+
 def test_ml_client_circuit_config_matches_settings() -> None:
 	"""The CircuitBreaker wired into MLServiceClient must use the values from MLSettings."""
-	settings = MLSettings()
+	MLSettings()
 
 	# Build the client with default settings and inspect its circuit breaker.
 	# We don't need a real HTTP connection — we're only checking __init__ state.
@@ -230,6 +236,7 @@ def test_ml_client_circuit_config_matches_settings() -> None:
 # 7. Async-wrapped circuit breaker works correctly
 # ---------------------------------------------------------------------------
 
+
 async def test_async_circuit_breaker_opens_and_rejects() -> None:
 	"""Verify circuit breaker integrates correctly with async call sites."""
 	threshold = 3
@@ -239,6 +246,7 @@ async def test_async_circuit_breaker_opens_and_rejects() -> None:
 		@cb
 		def _inner() -> None:
 			raise _Sentinel("async failure")
+
 		_inner()
 
 	# Trip the circuit
@@ -256,6 +264,7 @@ async def test_async_circuit_breaker_opens_and_rejects() -> None:
 # ---------------------------------------------------------------------------
 # 8. Independent circuits do not share state
 # ---------------------------------------------------------------------------
+
 
 def test_independent_circuits_have_isolated_state() -> None:
 	"""Two separate CircuitBreaker instances must not share failure counts."""

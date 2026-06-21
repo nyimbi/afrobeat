@@ -19,14 +19,13 @@ Run:
 
 from __future__ import annotations
 
+import queue
 import random
 import string
+import threading
 import time
 import uuid
 from typing import Any
-
-import queue
-import threading
 
 from locust import HttpUser, LoadTestShape, between, events, task
 from locust.clients import ResponseContextManager
@@ -34,7 +33,7 @@ from locust.clients import ResponseContextManager
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 _SUB_GENRES = ["afrobeats", "amapiano_cross", "afropop", "highlife", "afrofusion", "alte"]
-_LANGUAGES  = ["english", "yoruba", "pidgin", "igbo", "swahili"]
+_LANGUAGES = ["english", "yoruba", "pidgin", "igbo", "swahili"]
 
 
 def _rand_email() -> str:
@@ -54,7 +53,10 @@ def _rand_prompt() -> str:
 
 # ── custom metric helpers ──────────────────────────────────────────────────────
 
-def _fire_custom(name: str, response_time: float, success: bool = True, exception: Exception | None = None) -> None:
+
+def _fire_custom(
+	name: str, response_time: float, success: bool = True, exception: Exception | None = None
+) -> None:
 	"""Emit a custom Locust event so custom metrics appear in the stats table."""
 	events.request.fire(
 		request_type="METRIC",
@@ -71,24 +73,28 @@ def _fire_custom(name: str, response_time: float, success: bool = True, exceptio
 # Pre-created at test_start so authenticated VUs don't all hit /auth/register
 # concurrently and trigger the per-IP rate limit (5/hour).
 
-_POOL_SIZE    = 50   # pre-register this many users before the test starts
-_user_pool:   queue.Queue  = queue.Queue()
-_pool_lock    = threading.Lock()
-_pool_ready   = threading.Event()
+_POOL_SIZE = 50  # pre-register this many users before the test starts
+_user_pool: queue.Queue = queue.Queue()
+_pool_lock = threading.Lock()
+_pool_ready = threading.Event()
 
 
 @events.test_start.add_listener
 def _seed_user_pool(environment, **_kw) -> None:  # type: ignore[no-untyped-def]
 	"""Register POOL_SIZE users once before any VU starts."""
 	host = environment.host.rstrip("/")
-	import urllib.request, json as _json, urllib.error
+	import json as _json
+	import urllib.error
+	import urllib.request
 
 	seeded = 0
 	for _ in range(_POOL_SIZE):
-		email    = _rand_email()
+		email = _rand_email()
 		password = "Gbẹdu_Pool_S33d!"
-		payload  = _json.dumps({"email": email, "password": password, "full_name": "Pool User"}).encode()
-		req      = urllib.request.Request(
+		payload = _json.dumps(
+			{"email": email, "password": password, "full_name": "Pool User"}
+		).encode()
+		req = urllib.request.Request(
 			f"{host}/api/v1/auth/register",
 			data=payload,
 			headers={"Content-Type": "application/json"},
@@ -98,12 +104,14 @@ def _seed_user_pool(environment, **_kw) -> None:  # type: ignore[no-untyped-def]
 			with urllib.request.urlopen(req, timeout=10) as r:
 				body = _json.loads(r.read())
 				tokens = body["tokens"]
-				_user_pool.put({
-					"email":         email,
-					"password":      password,
-					"access_token":  tokens["access_token"],
-					"refresh_token": tokens["refresh_token"],
-				})
+				_user_pool.put(
+					{
+						"email": email,
+						"password": password,
+						"access_token": tokens["access_token"],
+						"refresh_token": tokens["refresh_token"],
+					}
+				)
 				seeded += 1
 		except Exception:
 			pass  # pool continues even if some registrations fail
@@ -127,6 +135,7 @@ def _pool_return(user: dict) -> None:
 
 # ── rate-limit back-off ────────────────────────────────────────────────────────
 
+
 def _with_backoff(fn, *args, max_retries: int = 3, base_delay: float = 1.0, **kwargs) -> Any:
 	"""
 	Call fn(*args, **kwargs); if it returns 429 retry with exponential back-off.
@@ -136,19 +145,21 @@ def _with_backoff(fn, *args, max_retries: int = 3, base_delay: float = 1.0, **kw
 		resp = fn(*args, **kwargs)
 		if resp.status_code != 429:
 			return resp
-		delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+		delay = base_delay * (2**attempt) + random.uniform(0, 0.5)
 		time.sleep(delay)
 	return resp  # return last response regardless
 
 
 # ── anonymous user ────────────────────────────────────────────────────────────
 
+
 class AnonymousUser(HttpUser):
 	"""
 	Simulates unauthenticated browsers browsing public content.
 	Weight 40 — the bulk of the traffic is anonymous reads.
 	"""
-	weight    = 40
+
+	weight = 40
 	wait_time = between(1, 5)
 
 	@task(5)
@@ -217,19 +228,21 @@ class AnonymousUser(HttpUser):
 
 # ── authenticated user ────────────────────────────────────────────────────────
 
+
 class AuthenticatedUser(HttpUser):
 	"""
 	Registers once, then drives the full generation lifecycle:
 	submit → poll until terminal → (optionally) download.
 	Weight 50.
 	"""
-	weight    = 50
+
+	weight = 50
 	wait_time = between(3, 10)
 
 	# per-VU state
-	_access_token:  str | None = None
+	_access_token: str | None = None
 	_refresh_token: str | None = None
-	_email:    str = ""
+	_email: str = ""
 	_password: str = ""
 	_my_track_ids: list[str]
 
@@ -241,13 +254,13 @@ class AuthenticatedUser(HttpUser):
 		_pool_ready.wait(timeout=15)
 		self._pool_user = _pool_get()
 		if self._pool_user:
-			self._email         = self._pool_user["email"]
-			self._password      = self._pool_user["password"]
-			self._access_token  = self._pool_user["access_token"]
+			self._email = self._pool_user["email"]
+			self._password = self._pool_user["password"]
+			self._access_token = self._pool_user["access_token"]
 			self._refresh_token = self._pool_user["refresh_token"]
 		else:
 			# Pool exhausted — register a fresh user as fallback
-			self._email    = _rand_email()
+			self._email = _rand_email()
 			self._password = _rand_password()
 			self._register_and_login()
 
@@ -257,15 +270,15 @@ class AuthenticatedUser(HttpUser):
 		resp = self.client.post(
 			"/api/v1/auth/register",
 			json={
-				"email":     self._email,
-				"password":  self._password,
+				"email": self._email,
+				"password": self._password,
 				"full_name": "Load Test User",
 			},
 			name="/api/v1/auth/register",
 		)
 		if resp.status_code == 201:
 			body = resp.json()
-			self._access_token  = body["tokens"]["access_token"]
+			self._access_token = body["tokens"]["access_token"]
 			self._refresh_token = body["tokens"]["refresh_token"]
 		elif resp.status_code == 429:
 			# Rate-limited — stop this VU rather than hammering with bad tokens
@@ -281,7 +294,7 @@ class AuthenticatedUser(HttpUser):
 		)
 		if resp.status_code == 200:
 			body = resp.json()
-			self._access_token  = body["access_token"]
+			self._access_token = body["access_token"]
 			self._refresh_token = body["refresh_token"]
 
 	def _auth_headers(self) -> dict[str, str]:
@@ -303,7 +316,7 @@ class AuthenticatedUser(HttpUser):
 			)
 			if r.status_code == 200:
 				body = r.json()
-				self._access_token  = body["access_token"]
+				self._access_token = body["access_token"]
 				self._refresh_token = body["refresh_token"]
 				return True
 		return False
@@ -315,11 +328,11 @@ class AuthenticatedUser(HttpUser):
 		submit_start = time.monotonic()
 
 		payload = {
-			"prompt":           _rand_prompt(),
-			"sub_genre":        random.choice(_SUB_GENRES),
-			"language":         random.choice(_LANGUAGES),
-			"bpm":              random.choice([None, 90, 100, 110, 120, 128]),
-			"energy_level":     random.randint(3, 9),
+			"prompt": _rand_prompt(),
+			"sub_genre": random.choice(_SUB_GENRES),
+			"language": random.choice(_LANGUAGES),
+			"bpm": random.choice([None, 90, 100, 110, 120, 128]),
+			"energy_level": random.randint(3, 9),
 			"duration_seconds": random.choice([15, 30, 60]),
 		}
 
@@ -343,9 +356,9 @@ class AuthenticatedUser(HttpUser):
 		submit_elapsed = (time.monotonic() - submit_start) * 1000
 		_fire_custom("generation_submission_time", submit_elapsed)
 
-		job_id    = job["id"]
+		job_id = job["id"]
 		poll_count = 0
-		terminal  = {"completed", "failed", "cancelled"}
+		terminal = {"completed", "failed", "cancelled"}
 
 		for _ in range(30):
 			time.sleep(2)
@@ -382,9 +395,7 @@ class AuthenticatedUser(HttpUser):
 			catch_response=True,
 			name="/api/v1/tracks (my list)",
 		) as resp:
-			if resp.status_code == 200:
-				resp.success()
-			elif resp.status_code == 401 and self._handle_401(resp):
+			if resp.status_code == 200 or resp.status_code == 401 and self._handle_401(resp):
 				resp.success()
 			else:
 				resp.failure(f"List tracks returned {resp.status_code}")
@@ -423,9 +434,7 @@ class AuthenticatedUser(HttpUser):
 			catch_response=True,
 			name="/api/v1/generations (list)",
 		) as resp:
-			if resp.status_code == 200:
-				resp.success()
-			elif resp.status_code == 401 and self._handle_401(resp):
+			if resp.status_code == 200 or resp.status_code == 401 and self._handle_401(resp):
 				resp.success()
 			else:
 				resp.failure(f"List generations returned {resp.status_code}")
@@ -441,9 +450,7 @@ class AuthenticatedUser(HttpUser):
 			catch_response=True,
 			name="/api/v1/tracks/{track_id}",
 		) as resp:
-			if resp.status_code in (200, 404):
-				resp.success()
-			elif resp.status_code == 401 and self._handle_401(resp):
+			if resp.status_code in (200, 404) or resp.status_code == 401 and self._handle_401(resp):
 				resp.success()
 			else:
 				resp.failure(f"Track detail returned {resp.status_code}")
@@ -458,43 +465,47 @@ class AuthenticatedUser(HttpUser):
 			)
 		# Return user to pool with fresh tokens for reuse by next VU
 		if self._pool_user and self._access_token:
-			self._pool_user["access_token"]  = self._access_token
-			self._pool_user["refresh_token"] = self._refresh_token or self._pool_user["refresh_token"]
+			self._pool_user["access_token"] = self._access_token
+			self._pool_user["refresh_token"] = (
+				self._refresh_token or self._pool_user["refresh_token"]
+			)
 			_pool_return(self._pool_user)
 			self._pool_user = None
 
 
 # ── power user ────────────────────────────────────────────────────────────────
 
+
 class PowerUser(HttpUser):
 	"""
 	Pro-tier user: everything AuthenticatedUser does, plus voice models and
 	marketplace listing creation.  Weight 10.
 	"""
-	weight    = 10
+
+	weight = 10
 	wait_time = between(3, 10)
 
-	_access_token:  str | None = None
+	_access_token: str | None = None
 	_refresh_token: str | None = None
-	_email:    str = ""
+	_email: str = ""
 	_password: str = ""
-	_my_track_ids:    list[str]
+	_my_track_ids: list[str]
 	_my_voice_models: list[str]
 
 	def on_start(self) -> None:
-		self._my_track_ids    = []
+		self._my_track_ids = []
 		self._my_voice_models = []
 		self._pool_user: dict | None = None
 
 		_pool_ready.wait(timeout=15)
 		self._pool_user = _pool_get()
 		if self._pool_user:
-			self._email         = self._pool_user["email"]
-			self._password      = self._pool_user["password"]
-			self._access_token  = self._pool_user["access_token"]
+			self._email = self._pool_user["email"]
+			self._password = self._pool_user["password"]
+			self._access_token = self._pool_user["access_token"]
 			self._refresh_token = self._pool_user["refresh_token"]
 		else:
-			self._email    = _rand_email()
+			self._email = _rand_email()
 			self._password = _rand_password()
 			self._register_and_login()
 
@@ -502,15 +513,15 @@ class PowerUser(HttpUser):
 		resp = self.client.post(
 			"/api/v1/auth/register",
 			json={
-				"email":     self._email,
-				"password":  self._password,
+				"email": self._email,
+				"password": self._password,
 				"full_name": "Power Load User",
 			},
 			name="/api/v1/auth/register (power)",
 		)
 		if resp.status_code == 201:
 			body = resp.json()
-			self._access_token  = body["tokens"]["access_token"]
+			self._access_token = body["tokens"]["access_token"]
 			self._refresh_token = body["tokens"]["refresh_token"]
 		elif resp.status_code == 429:
 			self.environment.runner.quit()
@@ -525,7 +536,7 @@ class PowerUser(HttpUser):
 		)
 		if resp.status_code == 200:
 			body = resp.json()
-			self._access_token  = body["access_token"]
+			self._access_token = body["access_token"]
 			self._refresh_token = body["refresh_token"]
 
 	def _auth_headers(self) -> dict[str, str]:
@@ -545,7 +556,7 @@ class PowerUser(HttpUser):
 			)
 			if r.status_code == 200:
 				body = r.json()
-				self._access_token  = body["access_token"]
+				self._access_token = body["access_token"]
 				self._refresh_token = body["refresh_token"]
 				return True
 		return False
@@ -554,11 +565,11 @@ class PowerUser(HttpUser):
 	def submit_generation(self) -> None:
 		submit_start = time.monotonic()
 		payload = {
-			"prompt":           _rand_prompt(),
-			"sub_genre":        random.choice(_SUB_GENRES),
-			"language":         random.choice(_LANGUAGES),
-			"bpm":              random.choice([None, 100, 115, 128]),
-			"energy_level":     random.randint(5, 10),
+			"prompt": _rand_prompt(),
+			"sub_genre": random.choice(_SUB_GENRES),
+			"language": random.choice(_LANGUAGES),
+			"bpm": random.choice([None, 100, 115, 128]),
+			"energy_level": random.randint(5, 10),
 			"duration_seconds": 60,
 		}
 		with _with_backoff(
@@ -581,9 +592,9 @@ class PowerUser(HttpUser):
 		submit_elapsed = (time.monotonic() - submit_start) * 1000
 		_fire_custom("generation_submission_time", submit_elapsed)
 
-		job_id    = job["id"]
+		job_id = job["id"]
 		poll_count = 0
-		terminal  = {"completed", "failed", "cancelled"}
+		terminal = {"completed", "failed", "cancelled"}
 
 		for _ in range(30):
 			time.sleep(2)
@@ -619,10 +630,7 @@ class PowerUser(HttpUser):
 		) as resp:
 			if resp.status_code == 200:
 				data = resp.json()
-				self._my_voice_models = [
-					vm["id"] for vm in data
-					if not vm.get("is_preset")
-				]
+				self._my_voice_models = [vm["id"] for vm in data if not vm.get("is_preset")]
 				resp.success()
 			elif resp.status_code == 401 and self._handle_401(resp):
 				resp.success()
@@ -640,9 +648,7 @@ class PowerUser(HttpUser):
 			catch_response=True,
 			name="/api/v1/voice-models/{model_id}/status",
 		) as resp:
-			if resp.status_code in (200, 404):
-				resp.success()
-			elif resp.status_code == 401 and self._handle_401(resp):
+			if resp.status_code in (200, 404) or resp.status_code == 401 and self._handle_401(resp):
 				resp.success()
 			else:
 				resp.failure(f"Voice model status returned {resp.status_code}")
@@ -655,22 +661,24 @@ class PowerUser(HttpUser):
 		with self.client.post(
 			"/api/v1/marketplace/beats",
 			json={
-				"track_id":    track_id,
-				"title":       f"Load Test Beat {uuid.uuid4().hex[:6]}",
+				"track_id": track_id,
+				"title": f"Load Test Beat {uuid.uuid4().hex[:6]}",
 				"description": "Generated during load testing",
 				"license_type": "non_exclusive",
-				"price_minor":  0,
-				"currency":    "USD",
-				"tags":        ["afrobeats", "loadtest"],
+				"price_minor": 0,
+				"currency": "USD",
+				"tags": ["afrobeats", "loadtest"],
 			},
 			headers=self._auth_headers(),
 			catch_response=True,
 			name="/api/v1/marketplace/beats (create)",
 		) as resp:
 			# 409 = already listed — not a failure in load context
-			if resp.status_code in (200, 201, 409):
-				resp.success()
-			elif resp.status_code == 401 and self._handle_401(resp):
+			if (
+				resp.status_code in (200, 201, 409)
+				or resp.status_code == 401
+				and self._handle_401(resp)
+			):
 				resp.success()
 			elif resp.status_code == 403:
 				# Pro tier gate — expected for free-tier VUs
@@ -699,9 +707,7 @@ class PowerUser(HttpUser):
 			catch_response=True,
 			name="/api/v1/marketplace/my-listings",
 		) as resp:
-			if resp.status_code == 200:
-				resp.success()
-			elif resp.status_code == 401 and self._handle_401(resp):
+			if resp.status_code == 200 or resp.status_code == 401 and self._handle_401(resp):
 				resp.success()
 			else:
 				resp.failure(f"My listings returned {resp.status_code}")
@@ -714,13 +720,16 @@ class PowerUser(HttpUser):
 				name="/api/v1/auth/logout (power)",
 			)
 		if self._pool_user and self._access_token:
-			self._pool_user["access_token"]  = self._access_token
-			self._pool_user["refresh_token"] = self._refresh_token or self._pool_user["refresh_token"]
+			self._pool_user["access_token"] = self._access_token
+			self._pool_user["refresh_token"] = (
+				self._refresh_token or self._pool_user["refresh_token"]
+			)
 			_pool_return(self._pool_user)
 			self._pool_user = None
 
 
 # ── load shape ────────────────────────────────────────────────────────────────
+
 
 class StagesShape(LoadTestShape):
 	"""
@@ -736,11 +745,11 @@ class StagesShape(LoadTestShape):
 	"""
 
 	stages: list[tuple[int, int, float]] = [
-		(120,  50,   0.5),   # 0–2 min: ramp to 50
-		(480,  50,   0.5),   # 2–8 min: sustain
-		(600,  200,  3.0),   # 8–10 min: spike to 200
-		(720,  200,  0.5),   # 10–12 min: stress
-		(840,  0,    5.0),   # 12–14 min: ramp down
+		(120, 50, 0.5),  # 0–2 min: ramp to 50
+		(480, 50, 0.5),  # 2–8 min: sustain
+		(600, 200, 3.0),  # 8–10 min: spike to 200
+		(720, 200, 0.5),  # 10–12 min: stress
+		(840, 0, 5.0),  # 12–14 min: ramp down
 	]
 
 	def tick(self) -> tuple[int, float] | None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -16,7 +16,11 @@ class StructlogMiddleware(BaseHTTPMiddleware):
 	and user_id when authenticated. Binds request_id into the structlog context
 	so all downstream log calls in the same request carry it automatically."""
 
-	async def dispatch(self, request: Request, call_next: Callable) -> Response:
+	async def dispatch(
+		self,
+		request: Request,
+		call_next: Callable[[Request], Awaitable[Response]],
+	) -> Response:
 		request_id = getattr(request.state, "request_id", None)
 
 		structlog.contextvars.clear_contextvars()

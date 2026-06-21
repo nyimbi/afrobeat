@@ -7,7 +7,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import structlog
@@ -24,6 +24,7 @@ _tracer = trace.get_tracer(__name__)
 # Each is 2 s of shaped noise at 44100 Hz, 16-bit stereo.
 # Real deployment would swap these for actual short reference stems.
 
+
 def _make_reference_wav_b64(
 	rms_target: float,
 	bass_boost: float,
@@ -39,20 +40,22 @@ def _make_reference_wav_b64(
 	noise = rng.standard_normal((n, 2)).astype(np.float32)
 
 	# Rough spectral shaping via FFT
-	from scipy.fft import rfft, irfft
+	from scipy import fft as scipy_fft
+
+	fft = cast(Any, scipy_fft)
 	freqs = np.fft.rfftfreq(n, 1 / sr)
 	for ch in range(2):
-		spectrum = rfft(noise[:, ch])
+		spectrum: Any = fft.rfft(noise[:, ch])
 		# Bass boost below 120 Hz
 		bass_mask = freqs < 120
-		spectrum[bass_mask] *= (1.0 + bass_boost)
+		spectrum[bass_mask] *= 1.0 + bass_boost
 		# High cut above high_cut Hz
 		high_mask = freqs > high_cut
 		spectrum[high_mask] *= 0.3
-		noise[:, ch] = irfft(spectrum, n=n).astype(np.float32)
+		noise[:, ch] = np.asarray(fft.irfft(spectrum, n=n), dtype=np.float32)
 
 	# Normalise to target RMS
-	current_rms = float(np.sqrt(np.mean(noise ** 2)))
+	current_rms = float(np.sqrt(np.mean(noise**2)))
 	if current_rms > 1e-9:
 		noise = noise * (rms_target / current_rms)
 	noise = np.clip(noise, -1.0, 1.0)
@@ -65,8 +68,8 @@ def _make_reference_wav_b64(
 # Profiles: (label, rms_target, bass_boost, high_cut_hz)
 _REFERENCE_PROFILES: list[tuple[str, float, float, float]] = [
 	("afrobeats_standard", 0.22, 2.5, 14000.0),
-	("afrobeats_bright",   0.20, 1.5, 16000.0),
-	("afrobeats_warm",     0.25, 3.5, 12000.0),
+	("afrobeats_bright", 0.20, 1.5, 16000.0),
+	("afrobeats_warm", 0.25, 3.5, 12000.0),
 ]
 
 _reference_wav_b64_cache: dict[str, str] = {}
@@ -141,7 +144,11 @@ class AudioMastering:
 			try:
 				loop = asyncio.get_running_loop()
 				used_fallback = await loop.run_in_executor(
-					None, self._master_sync, audio_path, reference_path, output_path,
+					None,
+					self._master_sync,
+					audio_path,
+					reference_path,
+					output_path,
 				)
 				elapsed = time.perf_counter() - t0
 				log.info(
@@ -196,7 +203,7 @@ class AudioMastering:
 		try:
 			import matchering as mg
 
-			mg.process(
+			cast(Any, mg).process(
 				target=str(audio_path),
 				reference=str(reference_path),
 				results=[mg.Result(str(output_path), subtype="PCM_24", use_limiter=True)],
@@ -211,15 +218,18 @@ class AudioMastering:
 			return True
 
 	def _fallback_normalize(self, audio_path: Path, output_path: Path) -> None:
-		from pedalboard import Compressor, Limiter, Pedalboard
+		import pedalboard as pedalboard_module
 		import soundfile as sf
+		from pedalboard import Compressor, Limiter
 
 		audio, sr = sf.read(str(audio_path), always_2d=True)
 		audio_t = audio.T.astype(np.float32)
 
-		board = Pedalboard([
-			Compressor(threshold_db=-18.0, ratio=3.0, attack_ms=10.0, release_ms=200.0),
-			Limiter(threshold_db=-1.0, release_ms=100.0),
-		])
+		board = cast(Any, pedalboard_module).Pedalboard(
+			[
+				Compressor(threshold_db=-18.0, ratio=3.0, attack_ms=10.0, release_ms=200.0),
+				Limiter(threshold_db=-1.0, release_ms=100.0),
+			]
+		)
 		processed = board(audio_t, sample_rate=sr)
 		sf.write(str(output_path), processed.T, sr, subtype="PCM_24")

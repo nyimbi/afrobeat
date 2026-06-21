@@ -12,11 +12,11 @@ from gbedu_core._uuid7 import uuid7str
 from gbedu_core.db import Base, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
-	from gbedu_core.models.user import User
 	from gbedu_core.models.track import Track
+	from gbedu_core.models.user import User
 
 
-class ListingStatus(str, enum.Enum):
+class ListingStatus(enum.StrEnum):
 	draft = "draft"
 	active = "active"
 	paused = "paused"
@@ -24,7 +24,7 @@ class ListingStatus(str, enum.Enum):
 	removed = "removed"
 
 
-class LicenseType(str, enum.Enum):
+class LicenseType(enum.StrEnum):
 	# Non-exclusive — buyer can use commercially, seller retains ownership
 	non_exclusive = "non_exclusive"
 	# Exclusive — all rights transferred to buyer, listing deactivated after sale
@@ -38,7 +38,11 @@ class BeatListing(Base, TimestampMixin, SoftDeleteMixin):
 
 	id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7str)
 	track_id: Mapped[str] = mapped_column(
-		String(36), ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+		String(36),
+		ForeignKey("tracks.id", ondelete="CASCADE"),
+		nullable=False,
+		unique=True,
+		index=True,
 	)
 	seller_id: Mapped[str] = mapped_column(
 		String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
@@ -66,10 +70,14 @@ class BeatListing(Base, TimestampMixin, SoftDeleteMixin):
 
 	# Counts maintained by triggers / application logic
 	view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-	purchase_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+	purchase_count: Mapped[int] = mapped_column(
+		Integer, nullable=False, default=0, server_default="0"
+	)
 
 	# Genre/mood tags for discovery
-	tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+	tags: Mapped[list[str]] = mapped_column(
+		JSONB, nullable=False, default=list, server_default="[]"
+	)
 
 	# Watermarked preview URL served before purchase
 	preview_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
@@ -120,21 +128,25 @@ class BeatPurchase(Base, TimestampMixin):
 
 	# Signed URL or R2 path to the full-quality download, generated post-payment
 	download_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-	download_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-	download_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+	download_expires_at: Mapped[datetime | None] = mapped_column(
+		DateTime(timezone=True), nullable=True
+	)
+	download_count: Mapped[int] = mapped_column(
+		Integer, nullable=False, default=0, server_default="0"
+	)
 
 	metadata_: Mapped[dict[str, Any]] = mapped_column(
 		"metadata", JSONB, nullable=False, default=dict, server_default="{}"
 	)
 
-	listing: Mapped[BeatListing] = relationship("BeatListing", back_populates="purchases", lazy="noload")
+	listing: Mapped[BeatListing] = relationship(
+		"BeatListing", back_populates="purchases", lazy="noload"
+	)
 	buyer: Mapped[User] = relationship(
 		"User", foreign_keys=[buyer_id], back_populates="purchases", lazy="noload"
 	)
 
-	__table_args__ = (
-		Index("ix_purchases_buyer_listing", "buyer_id", "listing_id", unique=True),
-	)
+	__table_args__ = (Index("ix_purchases_buyer_listing", "buyer_id", "listing_id", unique=True),)
 
 	def __repr__(self) -> str:
 		return (

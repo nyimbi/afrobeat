@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 	from gbedu_core.models.user import User
 
 
-class PaymentProvider(str, enum.Enum):
+class PaymentProvider(enum.StrEnum):
 	stripe = "stripe"
 	paystack = "paystack"
 
@@ -40,14 +40,18 @@ class WebhookEvent(Base):
 	)
 	event_type: Mapped[str] = mapped_column(String(128), nullable=False)
 	processed_at: Mapped[datetime] = mapped_column(
-		DateTime(timezone=True), nullable=False,
+		DateTime(timezone=True),
+		nullable=False,
 	)
 	metadata_: Mapped[dict[str, Any]] = mapped_column(
-		"metadata", JSONB, nullable=False, default=dict,
+		"metadata",
+		JSONB,
+		nullable=False,
+		default=dict,
 	)
 
 
-class PaymentStatus(str, enum.Enum):
+class PaymentStatus(enum.StrEnum):
 	pending = "pending"
 	succeeded = "succeeded"
 	failed = "failed"
@@ -56,7 +60,7 @@ class PaymentStatus(str, enum.Enum):
 	disputed = "disputed"
 
 
-class InvoiceStatus(str, enum.Enum):
+class InvoiceStatus(enum.StrEnum):
 	draft = "draft"
 	open = "open"
 	paid = "paid"
@@ -64,7 +68,7 @@ class InvoiceStatus(str, enum.Enum):
 	uncollectible = "uncollectible"
 
 
-class SubscriptionInterval(str, enum.Enum):
+class SubscriptionInterval(enum.StrEnum):
 	month = "month"
 	year = "year"
 
@@ -107,7 +111,9 @@ class Subscription(Base, TimestampMixin):
 	)
 
 	user: Mapped[User] = relationship("User", back_populates="subscriptions", lazy="noload")
-	payments: Mapped[list[Payment]] = relationship("Payment", back_populates="subscription", lazy="noload")
+	payments: Mapped[list[Payment]] = relationship(
+		"Payment", back_populates="subscription", lazy="noload"
+	)
 
 	__table_args__ = (Index("ix_subscriptions_user_status", "user_id", "status"),)
 
@@ -141,7 +147,9 @@ class Payment(Base, TimestampMixin):
 
 	amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
 	currency: Mapped[str] = mapped_column(String(3), nullable=False)
-	refunded_amount_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+	refunded_amount_minor: Mapped[int] = mapped_column(
+		Integer, nullable=False, default=0, server_default="0"
+	)
 
 	description: Mapped[str | None] = mapped_column(Text, nullable=True)
 	failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

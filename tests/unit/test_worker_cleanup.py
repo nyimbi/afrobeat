@@ -3,16 +3,16 @@ from __future__ import annotations
 """Unit tests for gbedu_worker.tasks.cleanup async helpers."""
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-
 # ── helpers ───────────────────────────────────────────────────────────────
 
-def _make_session(scalars_return: list[Any] | None = None, rowcount: int = 5) -> tuple[MagicMock, Any]:
+
+def _make_session(
+	scalars_return: list[Any] | None = None, rowcount: int = 5
+) -> tuple[MagicMock, Any]:
 	session = MagicMock()
 	session.add = MagicMock()
 	session.commit = AsyncMock()
@@ -46,10 +46,11 @@ def _make_track(track_id: str = "t1", distribution_status: str = "pending_retry"
 
 # ── _do_cleanup_temp_files ────────────────────────────────────────────────
 
+
 async def test_cleanup_temp_files_deletes_old_objects() -> None:
 	from gbedu_worker.tasks.cleanup import _do_cleanup_temp_files
 
-	now = datetime.now(timezone.utc)
+	now = datetime.now(UTC)
 	old_time = now - timedelta(hours=25)
 	recent_time = now - timedelta(hours=1)
 
@@ -77,7 +78,7 @@ async def test_cleanup_temp_files_deletes_old_objects() -> None:
 async def test_cleanup_temp_files_no_old_objects() -> None:
 	from gbedu_worker.tasks.cleanup import _do_cleanup_temp_files
 
-	now = datetime.now(timezone.utc)
+	now = datetime.now(UTC)
 	paginator = MagicMock()
 	page = {"Contents": [{"Key": "temp/fresh.mp3", "LastModified": now}]}
 	paginator.paginate.return_value = [page]
@@ -111,6 +112,7 @@ async def test_cleanup_temp_files_empty_bucket() -> None:
 
 # ── _delete_batch ─────────────────────────────────────────────────────────
 
+
 def test_delete_batch_returns_count_minus_errors() -> None:
 	from gbedu_worker.tasks.cleanup import _delete_batch
 
@@ -125,8 +127,8 @@ def test_delete_batch_returns_count_minus_errors() -> None:
 
 
 def test_delete_batch_client_error_returns_zero() -> None:
-	from gbedu_worker.tasks.cleanup import _delete_batch
 	from botocore.exceptions import ClientError
+	from gbedu_worker.tasks.cleanup import _delete_batch
 
 	mock_s3 = MagicMock()
 	mock_s3.delete_objects.side_effect = ClientError(
@@ -140,6 +142,7 @@ def test_delete_batch_client_error_returns_zero() -> None:
 
 
 # ── _do_reset_generation_counts ───────────────────────────────────────────
+
 
 async def test_reset_generation_counts_returns_rows_affected() -> None:
 	from gbedu_worker.tasks.cleanup import _do_reset_generation_counts
@@ -165,6 +168,7 @@ async def test_reset_generation_counts_no_rows() -> None:
 
 
 # ── _do_retry_failed_distributions ────────────────────────────────────────
+
 
 async def test_retry_distributions_empty_list() -> None:
 	from gbedu_worker.tasks.cleanup import _do_retry_failed_distributions
@@ -204,7 +208,10 @@ async def test_retry_distributions_failure_increments_count() -> None:
 
 	with (
 		patch("gbedu_worker.tasks.cleanup.get_async_session", ctx),
-		patch("gbedu_worker.tasks.cleanup._attempt_distribution", AsyncMock(side_effect=RuntimeError("DSP down"))),
+		patch(
+			"gbedu_worker.tasks.cleanup._attempt_distribution",
+			AsyncMock(side_effect=RuntimeError("DSP down")),
+		),
 	):
 		result = await _do_retry_failed_distributions()
 

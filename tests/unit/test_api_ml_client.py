@@ -9,13 +9,14 @@ Tests MLServiceClient for:
 - generate_music() 4xx raises MLServiceError via raise_for_status
 - get_health() returns True on 200, False on error
 """
+
 from __future__ import annotations
 
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/gbedu_test")
@@ -38,11 +39,13 @@ def _make_settings():
 
 def _make_client():
 	from gbedu_api.services.ml_client import MLServiceClient
+
 	return MLServiceClient(_make_settings())
 
 
 def _make_request():
 	from gbedu_api.services.ml_client import GenerationRequest
+
 	return GenerationRequest(
 		prompt="Afrobeat dance track with highlife guitars",
 		sub_genre="afrobeats",
@@ -75,25 +78,29 @@ def _make_response(status_code: int, json_data: dict) -> MagicMock:
 
 # ── instantiation ─────────────────────────────────────────────────────────────
 
-def test_ml_client_instantiation():
+
+def test_ml_client_instantiation() -> None:
 	client = _make_client()
 	from gbedu_api.services.ml_client import MLServiceClient
+
 	assert isinstance(client, MLServiceClient)
 	assert client._base_url == "http://localhost:8001"
 	assert client._api_key == "test-key"
 	assert client._inference_timeout == 300
 
 
-def test_ml_client_instantiation_trailing_slash_stripped():
+def test_ml_client_instantiation_trailing_slash_stripped() -> None:
 	from gbedu_api.services.ml_client import MLServiceClient
+
 	settings = _make_settings()
 	settings.service_url = "http://localhost:8001/"
 	client = MLServiceClient(settings)
 	assert client._base_url == "http://localhost:8001"
 
 
-def test_ml_client_instantiation_empty_url_raises():
+def test_ml_client_instantiation_empty_url_raises() -> None:
 	from gbedu_api.services.ml_client import MLServiceClient
+
 	settings = _make_settings()
 	settings.service_url = ""
 	with pytest.raises(AssertionError):
@@ -102,7 +109,8 @@ def test_ml_client_instantiation_empty_url_raises():
 
 # ── GenerationRequest ─────────────────────────────────────────────────────────
 
-def test_generation_request_to_dict():
+
+def test_generation_request_to_dict() -> None:
 	req = _make_request()
 	d = req.to_dict()
 	assert d["prompt"] == "Afrobeat dance track with highlife guitars"
@@ -114,16 +122,19 @@ def test_generation_request_to_dict():
 	assert d["voice_model_id"] is None
 
 
-def test_generation_request_empty_prompt_raises():
+def test_generation_request_empty_prompt_raises() -> None:
 	from gbedu_api.services.ml_client import GenerationRequest
+
 	with pytest.raises(AssertionError):
 		GenerationRequest(prompt="", sub_genre="afrobeats", language="english")
 
 
 # ── GenerationResponse ────────────────────────────────────────────────────────
 
-def test_generation_response_parses_data():
+
+def test_generation_response_parses_data() -> None:
 	from gbedu_api.services.ml_client import GenerationResponse
+
 	resp = GenerationResponse({"job_id": "j1", "status": "queued", "audio_url": None})
 	assert resp.job_id == "j1"
 	assert resp.status == "queued"
@@ -134,7 +145,8 @@ def test_generation_response_parses_data():
 
 # ── generate_music success ────────────────────────────────────────────────────
 
-async def test_generate_music_success():
+
+async def test_generate_music_success() -> None:
 	client = _make_client()
 	req = _make_request()
 	resp = _make_response(200, {"job_id": "j1", "status": "queued"})
@@ -148,7 +160,8 @@ async def test_generate_music_success():
 
 # ── generate_music 503 raises HTTPStatusError ─────────────────────────────────
 
-async def test_generate_music_503_raises_http_status_error():
+
+async def test_generate_music_503_raises_http_status_error() -> None:
 	client = _make_client()
 	req = _make_request()
 
@@ -169,37 +182,44 @@ async def test_generate_music_503_raises_http_status_error():
 
 # ── generate_music timeout ────────────────────────────────────────────────────
 
-async def test_generate_music_timeout_raises_ml_timeout_error():
+
+async def test_generate_music_timeout_raises_ml_timeout_error() -> None:
 	client = _make_client()
 	req = _make_request()
 
-	with patch.object(
-		client._http,
-		"post",
-		AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+	with (
+		patch.object(
+			client._http,
+			"post",
+			AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+		),
+		pytest.raises(MLServiceTimeoutError),
 	):
-		with pytest.raises(MLServiceTimeoutError):
-			await client.generate_music(req)
+		await client.generate_music(req)
 
 
 # ── generate_music HTTP error ─────────────────────────────────────────────────
 
-async def test_generate_music_http_error_raises_ml_service_error():
+
+async def test_generate_music_http_error_raises_ml_service_error() -> None:
 	client = _make_client()
 	req = _make_request()
 
-	with patch.object(
-		client._http,
-		"post",
-		AsyncMock(side_effect=httpx.HTTPError("connection refused")),
+	with (
+		patch.object(
+			client._http,
+			"post",
+			AsyncMock(side_effect=httpx.HTTPError("connection refused")),
+		),
+		pytest.raises(MLServiceError),
 	):
-		with pytest.raises(MLServiceError):
-			await client.generate_music(req)
+		await client.generate_music(req)
 
 
 # ── generate_music 4xx raises MLServiceError ──────────────────────────────────
 
-async def test_generate_music_4xx_raises_ml_service_error():
+
+async def test_generate_music_4xx_raises_ml_service_error() -> None:
 	client = _make_client()
 	req = _make_request()
 	resp = _make_response(422, {"detail": "invalid input"})
@@ -211,7 +231,8 @@ async def test_generate_music_4xx_raises_ml_service_error():
 
 # ── get_health ────────────────────────────────────────────────────────────────
 
-async def test_get_health_returns_true_on_200():
+
+async def test_get_health_returns_true_on_200() -> None:
 	client = _make_client()
 	mock_resp = MagicMock()
 	mock_resp.status_code = 200
@@ -222,7 +243,7 @@ async def test_get_health_returns_true_on_200():
 	assert result is True
 
 
-async def test_get_health_returns_false_on_non_200():
+async def test_get_health_returns_false_on_non_200() -> None:
 	client = _make_client()
 	mock_resp = MagicMock()
 	mock_resp.status_code = 503
@@ -233,7 +254,7 @@ async def test_get_health_returns_false_on_non_200():
 	assert result is False
 
 
-async def test_get_health_returns_false_on_http_error():
+async def test_get_health_returns_false_on_http_error() -> None:
 	client = _make_client()
 
 	with patch.object(
@@ -248,7 +269,8 @@ async def test_get_health_returns_false_on_http_error():
 
 # ── close ─────────────────────────────────────────────────────────────────────
 
-async def test_close_calls_aclose():
+
+async def test_close_calls_aclose() -> None:
 	client = _make_client()
 	with patch.object(client._http, "aclose", AsyncMock()) as mock_close:
 		await client.close()

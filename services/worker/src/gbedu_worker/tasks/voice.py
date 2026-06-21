@@ -20,27 +20,26 @@ Design decisions:
 """
 
 import traceback as tb
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 import structlog
 from celery import Task
 from celery.exceptions import MaxRetriesExceededError
-from opentelemetry import trace
-
 from gbedu_core.config import get_settings
 from gbedu_core.models.voice import VoiceModel, VoiceModelStatus
 from gbedu_core.telemetry import get_tracer, increment_error_count
-from gbedu_worker.celery_app import app
+from opentelemetry import trace
+
+from gbedu_worker.celery_app import celery_task, retry_task
 from gbedu_worker.db import get_async_session, run_async
 
 log = structlog.get_logger(__name__)
 tracer = get_tracer(__name__)
 
 # RVC v2 training can take up to 4 hours for large corpora
-_SOFT_TIME_LIMIT = 14_400   # 4 h
-_HARD_TIME_LIMIT = 14_700   # 4 h 5 min — hard kill fires after soft_time_limit
+_SOFT_TIME_LIMIT = 14_400  # 4 h
+_HARD_TIME_LIMIT = 14_700  # 4 h 5 min — hard kill fires after soft_time_limit
 
 # HTTP timeout for the blocking ML service training call
 _ML_TIMEOUT = httpx.Timeout(connect=10.0, read=_SOFT_TIME_LIMIT + 300.0, write=120.0, pool=10.0)
@@ -49,12 +48,18 @@ _ML_TIMEOUT = httpx.Timeout(connect=10.0, read=_SOFT_TIME_LIMIT + 300.0, write=1
 _RETRY_COUNTDOWN = (60, 300, 900)
 
 # Failures that are worth retrying (transient network/infra faults)
-_RETRYABLE = (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError, ConnectionError)
+_RETRYABLE = (
+	httpx.TimeoutException,
+	httpx.ConnectError,
+	httpx.RemoteProtocolError,
+	ConnectionError,
+)
 
 
 # ── Task ──────────────────────────────────────────────────────────────────────
 
-@app.task(
+
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.voice.train_voice_model",
 	max_retries=3,
@@ -83,13 +88,13 @@ def train_voice_model(self: Task, voice_model_id: str) -> dict[str, Any]:
 		span.set_attribute("celery.task_id", self.request.id or "")
 
 		try:
-			result = run_async(_run_training(voice_model_id, self.request.id or ""))
+			result = run_async(_run_training, voice_model_id, self.request.id or "")
 			span.set_attribute("voice_model.final_status", result.get("status", "unknown"))
 			task_log.info("voice.train task complete", result_status=result.get("status"))
 			return result
 
 		except _RETRYABLE as exc:
-			retry_num = self.request.retries
+			retry_num = int(self.request.retries or 0)
 			countdown = _RETRY_COUNTDOWN[min(retry_num, len(_RETRY_COUNTDOWN) - 1)]
 			task_log.warning(
 				"retryable error — scheduling retry",
@@ -100,12 +105,12 @@ def train_voice_model(self: Task, voice_model_id: str) -> dict[str, Any]:
 			)
 			span.record_exception(exc)
 			try:
-				raise self.retry(exc=exc, countdown=countdown)
+				retry_task(self, exc=exc, countdown=countdown)
 			except MaxRetriesExceededError:
 				task_log.error("max retries exceeded — marking model failed")
 				increment_error_count(error_code="VOICE_TRAIN_MAX_RETRIES", service="worker.voice")
 				try:
-					run_async(_mark_failed(voice_model_id, exc))
+					run_async(_mark_failed, voice_model_id, exc)
 				except Exception as db_exc:
 					task_log.error("failed to write failure status to DB", db_exc=str(db_exc))
 				raise
@@ -121,13 +126,14 @@ def train_voice_model(self: Task, voice_model_id: str) -> dict[str, Any]:
 			span.set_status(trace.StatusCode.ERROR, str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.voice")
 			try:
-				run_async(_mark_failed(voice_model_id, exc))
+				run_async(_mark_failed, voice_model_id, exc)
 			except Exception as db_exc:
 				task_log.error("failed to write failure status to DB", db_exc=str(db_exc))
 			raise
 
 
 # ── Async implementation ───────────────────────────────────────────────────────
+
 
 async def _run_training(voice_model_id: str, celery_task_id: str) -> dict[str, Any]:
 	"""Full training orchestration coroutine."""

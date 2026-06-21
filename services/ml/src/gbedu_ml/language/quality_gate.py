@@ -29,32 +29,34 @@ log = structlog.get_logger(__name__)
 # code-switching.
 
 # Single-word markers — matched with \b word boundaries.
-_PIDGIN_MARKERS_SINGLE: frozenset[str] = frozenset({
-	"don",    # aspect marker (completive): "I don chop" = "I have eaten"
-	"dey",    # locative / progressive: "e dey here", "she dey sing"
-	"na",     # copula / focus marker: "na lie", "na me"
-	"abi",    # tag question / confirmation: "you sabi, abi?"
-	"wetin",  # what: "wetin dey happen?"
-	"sabi",   # to know / to understand: "you sabi?"
-	"wahala", # trouble / problem: "no wahala"
-	"shey",   # interrogative tag / confirmation: "shey you ready?"
-	"oga",    # boss / sir / term of address
-	"waka",   # to walk / go away: "waka waka"
-	"chop",   # to eat / enjoy: "make we chop"
-	"kpele",  # sorry / pity
-	"dem",    # they/them: "dem dey come"
-	"una",    # you (plural): "una ready?"
-	"comot",  # come out / leave: "comot here"
-	# Excluded (high English false-positive rate):
-	# "e"    — \be\b matches English text too broadly
-	# "am"   — auxiliary verb in standard English ("I am going")
-	# "im"   — marginal; too short to be reliable
-	# "make" — common English verb ("make it happen")
-})
+_PIDGIN_MARKERS_SINGLE: frozenset[str] = frozenset(
+	{
+		"don",  # aspect marker (completive): "I don chop" = "I have eaten"
+		"dey",  # locative / progressive: "e dey here", "she dey sing"
+		"na",  # copula / focus marker: "na lie", "na me"
+		"abi",  # tag question / confirmation: "you sabi, abi?"
+		"wetin",  # what: "wetin dey happen?"
+		"sabi",  # to know / to understand: "you sabi?"
+		"wahala",  # trouble / problem: "no wahala"
+		"shey",  # interrogative tag / confirmation: "shey you ready?"
+		"oga",  # boss / sir / term of address
+		"waka",  # to walk / go away: "waka waka"
+		"chop",  # to eat / enjoy: "make we chop"
+		"kpele",  # sorry / pity
+		"dem",  # they/them: "dem dey come"
+		"una",  # you (plural): "una ready?"
+		"comot",  # come out / leave: "comot here"
+		# Excluded (high English false-positive rate):
+		# "e"    — \be\b matches English text too broadly
+		# "am"   — auxiliary verb in standard English ("I am going")
+		# "im"   — marginal; too short to be reliable
+		# "make" — common English verb ("make it happen")
+	}
+)
 
 # Multi-word markers — matched as literal phrases (spaces handled by \s+).
 _PIDGIN_MARKERS_MULTI: tuple[str, ...] = (
-	"no be",   # negated copula: "e no be lie"
+	"no be",  # negated copula: "e no be lie"
 )
 
 # Combined marker set for external reference (e.g. tests, prompt generation).
@@ -64,11 +66,11 @@ _PIDGIN_MARKERS: frozenset[str] = _PIDGIN_MARKERS_SINGLE | frozenset(_PIDGIN_MAR
 # "don" should not match "donkey", "na" should not match "navigate".
 # Multi-word phrases are matched separately with \s+ between tokens.
 _single_alts = sorted(_PIDGIN_MARKERS_SINGLE, key=len, reverse=True)
-_multi_alts = [r"\b" + r"\s+".join(re.escape(w) for w in p.split()) + r"\b" for p in _PIDGIN_MARKERS_MULTI]
+_multi_alts = [
+	r"\b" + r"\s+".join(re.escape(w) for w in p.split()) + r"\b" for p in _PIDGIN_MARKERS_MULTI
+]
 _PIDGIN_MARKER_RE = re.compile(
-	"|".join(
-		_multi_alts + [r"\b" + re.escape(m) + r"\b" for m in _single_alts]
-	),
+	"|".join(_multi_alts + [r"\b" + re.escape(m) + r"\b" for m in _single_alts]),
 	re.IGNORECASE,
 )
 
@@ -90,28 +92,30 @@ _YORUBA_CHAR_MIN_DENSITY = 0.5
 # Swahili is ASCII — detected via high-precision vocabulary markers that are
 # common in East African pop but absent or rare in English.
 
-_SWAHILI_MARKERS: frozenset[str] = frozenset({
-	"mimi",       # I / me
-	"wewe",       # you (singular)
-	"sisi",       # we / us
-	"lakini",     # but
-	"pamoja",     # together
-	"asante",     # thank you
-	"karibu",     # welcome / near
-	"mbona",      # why / how come
-	"bado",       # still / not yet
-	"pole",       # sorry / gently
-	"haraka",     # quickly / hurry
-	"ndiyo",      # yes
-	"hapana",     # no
-	"nataka",     # I want
-	"kweli",      # truth / truly
-	"sawa",       # okay / equal
-	"jambo",      # hello / matter
-	"nakupenda",  # I love you
-	"uchungu",    # pain / bitterness
-	"furaha",     # happiness / joy
-})
+_SWAHILI_MARKERS: frozenset[str] = frozenset(
+	{
+		"mimi",  # I / me
+		"wewe",  # you (singular)
+		"sisi",  # we / us
+		"lakini",  # but
+		"pamoja",  # together
+		"asante",  # thank you
+		"karibu",  # welcome / near
+		"mbona",  # why / how come
+		"bado",  # still / not yet
+		"pole",  # sorry / gently
+		"haraka",  # quickly / hurry
+		"ndiyo",  # yes
+		"hapana",  # no
+		"nataka",  # I want
+		"kweli",  # truth / truly
+		"sawa",  # okay / equal
+		"jambo",  # hello / matter
+		"nakupenda",  # I love you
+		"uchungu",  # pain / bitterness
+		"furaha",  # happiness / joy
+	}
+)
 
 _SWAHILI_MARKER_RE = re.compile(
 	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_SWAHILI_MARKERS, key=len, reverse=True)),
@@ -124,26 +128,28 @@ _SWAHILI_MARKER_MIN_RATE = 2.0  # markers per 100 words
 # High-precision Lingala vocabulary found in Congolese soukous lyrics.
 # Using vocabulary rather than diacritics because Lingala diacritics overlap with French.
 
-_LINGALA_MARKERS: frozenset[str] = frozenset({
-	"bolingo",    # love
-	"mbote",      # hello / peace / greetings
-	"ndeko",      # friend / sibling
-	"biso",       # us / our
-	"mpenza",     # really / truly
-	"ntango",     # time / moment
-	"nzoto",      # body
-	"eloko",      # thing / something
-	"mwana",      # child
-	"sango",      # news / message
-	"nakobina",   # I will dance
-	"nakozela",   # I will wait
-	"nakokoma",   # I will arrive / become
-	"liwa",       # death (dramatic; common in Congolese ballads)
-	"lelo",       # today
-	"lobi",       # tomorrow
-	"boye",       # like this / thus
-	"elongi",     # face / beauty
-})
+_LINGALA_MARKERS: frozenset[str] = frozenset(
+	{
+		"bolingo",  # love
+		"mbote",  # hello / peace / greetings
+		"ndeko",  # friend / sibling
+		"biso",  # us / our
+		"mpenza",  # really / truly
+		"ntango",  # time / moment
+		"nzoto",  # body
+		"eloko",  # thing / something
+		"mwana",  # child
+		"sango",  # news / message
+		"nakobina",  # I will dance
+		"nakozela",  # I will wait
+		"nakokoma",  # I will arrive / become
+		"liwa",  # death (dramatic; common in Congolese ballads)
+		"lelo",  # today
+		"lobi",  # tomorrow
+		"boye",  # like this / thus
+		"elongi",  # face / beauty
+	}
+)
 
 _LINGALA_MARKER_RE = re.compile(
 	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_LINGALA_MARKERS, key=len, reverse=True)),
@@ -155,28 +161,30 @@ _LINGALA_MARKER_MIN_RATE = 1.5  # markers per 100 words (lower: less training da
 # ── Zulu marker lexicon ────────────────────────────────────────────────────────
 # isiZulu vocabulary markers from township and Amapiano register.
 
-_ZULU_MARKERS: frozenset[str] = frozenset({
-	"sawubona",     # hello (singular)
-	"sanibonani",   # hello (plural)
-	"ngiyabonga",   # thank you
-	"siyabonga",    # we thank you
-	"yebo",         # yes
-	"hayi",         # no
-	"thina",        # we / us
-	"wena",         # you
-	"umuntu",       # person
-	"ubuntu",       # humanity / communal spirit
-	"abantu",       # people
-	"amandla",      # power
-	"uthando",      # love
-	"injabulo",     # happiness / joy
-	"laduma",       # it thunders — shout of celebration
-	"bayete",       # royal greeting / praise
-	"ngikhona",     # I am here / I'm present
-	"ngiyakuthanda", # I love you
-	"mina",         # I / me (emphatic)
-	"woza",         # come / come here
-})
+_ZULU_MARKERS: frozenset[str] = frozenset(
+	{
+		"sawubona",  # hello (singular)
+		"sanibonani",  # hello (plural)
+		"ngiyabonga",  # thank you
+		"siyabonga",  # we thank you
+		"yebo",  # yes
+		"hayi",  # no
+		"thina",  # we / us
+		"wena",  # you
+		"umuntu",  # person
+		"ubuntu",  # humanity / communal spirit
+		"abantu",  # people
+		"amandla",  # power
+		"uthando",  # love
+		"injabulo",  # happiness / joy
+		"laduma",  # it thunders — shout of celebration
+		"bayete",  # royal greeting / praise
+		"ngikhona",  # I am here / I'm present
+		"ngiyakuthanda",  # I love you
+		"mina",  # I / me (emphatic)
+		"woza",  # come / come here
+	}
+)
 
 _ZULU_MARKER_RE = re.compile(
 	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_ZULU_MARKERS, key=len, reverse=True)),
@@ -197,26 +205,28 @@ _TWI_CHAR_MIN_DENSITY = 0.3  # chars per 100 total chars (lower than Yoruba: few
 # High-precision Igbo vocabulary — words absent from English, unlikely in other
 # African-language outputs, common in Igbo lyric tradition.
 
-_IGBO_MARKERS: frozenset[str] = frozenset({
-	"biko",       # please — highly distinctive
-	"daalu",      # thank you
-	"ndewo",      # hello / greeting
-	"ututu",      # morning
-	"oge",        # time
-	"obi",        # heart / compound (home)
-	"eze",        # king
-	"nna",        # father
-	"nne",        # mother
-	"onye",       # person
-	"mmiri",      # water
-	"oji",        # kola nut
-	"igwe",       # iron / chief
-	"chukwu",     # God (supreme deity)
-	"chineke",    # Creator God
-	"ifunanya",   # love
-	"ekele",      # greeting / respect
-	"ugwu",       # respect / hill
-})
+_IGBO_MARKERS: frozenset[str] = frozenset(
+	{
+		"biko",  # please — highly distinctive
+		"daalu",  # thank you
+		"ndewo",  # hello / greeting
+		"ututu",  # morning
+		"oge",  # time
+		"obi",  # heart / compound (home)
+		"eze",  # king
+		"nna",  # father
+		"nne",  # mother
+		"onye",  # person
+		"mmiri",  # water
+		"oji",  # kola nut
+		"igwe",  # iron / chief
+		"chukwu",  # God (supreme deity)
+		"chineke",  # Creator God
+		"ifunanya",  # love
+		"ekele",  # greeting / respect
+		"ugwu",  # respect / hill
+	}
+)
 
 _IGBO_MARKER_RE = re.compile(
 	"|".join(r"\b" + re.escape(m) + r"\b" for m in sorted(_IGBO_MARKERS, key=len, reverse=True)),
@@ -286,7 +296,7 @@ class PidginYorubaQualityGate:
 		reason = (
 			f"Pidgin marker rate {rate:.1f}/100 words "
 			f"({'≥' if passed else '<'} threshold {_PIDGIN_MARKER_MIN_RATE}); "
-			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+			f"markers found: {sorted({m.lower() for m in matches}) or 'none'}"
 		)
 
 		log.debug(
@@ -392,7 +402,7 @@ class PidginYorubaQualityGate:
 		reason = (
 			f"Swahili marker rate {rate:.1f}/100 words "
 			f"({'≥' if passed else '<'} threshold {_SWAHILI_MARKER_MIN_RATE}); "
-			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+			f"markers found: {sorted({m.lower() for m in matches}) or 'none'}"
 		)
 
 		log.debug(
@@ -404,7 +414,9 @@ class PidginYorubaQualityGate:
 			confidence=round(confidence, 3),
 		)
 
-		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+		return QualityGateResult(
+			passed=passed, confidence=confidence, reason=reason, marker_rate=rate
+		)
 
 	# ── Lingala ───────────────────────────────────────────────────────────────
 
@@ -440,7 +452,7 @@ class PidginYorubaQualityGate:
 		reason = (
 			f"Lingala marker rate {rate:.1f}/100 words "
 			f"({'≥' if passed else '<'} threshold {_LINGALA_MARKER_MIN_RATE}); "
-			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+			f"markers found: {sorted({m.lower() for m in matches}) or 'none'}"
 		)
 
 		log.debug(
@@ -452,7 +464,9 @@ class PidginYorubaQualityGate:
 			confidence=round(confidence, 3),
 		)
 
-		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+		return QualityGateResult(
+			passed=passed, confidence=confidence, reason=reason, marker_rate=rate
+		)
 
 	# ── Zulu ──────────────────────────────────────────────────────────────────
 
@@ -489,7 +503,7 @@ class PidginYorubaQualityGate:
 		reason = (
 			f"Zulu marker rate {rate:.1f}/100 words "
 			f"({'≥' if passed else '<'} threshold {_ZULU_MARKER_MIN_RATE}); "
-			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+			f"markers found: {sorted({m.lower() for m in matches}) or 'none'}"
 		)
 
 		log.debug(
@@ -501,7 +515,9 @@ class PidginYorubaQualityGate:
 			confidence=round(confidence, 3),
 		)
 
-		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+		return QualityGateResult(
+			passed=passed, confidence=confidence, reason=reason, marker_rate=rate
+		)
 
 	# ── Igbo ──────────────────────────────────────────────────────────────────
 
@@ -538,7 +554,7 @@ class PidginYorubaQualityGate:
 		reason = (
 			f"Igbo marker rate {rate:.1f}/100 words "
 			f"({'≥' if passed else '<'} threshold {_IGBO_MARKER_MIN_RATE}); "
-			f"markers found: {sorted(set(m.lower() for m in matches)) or 'none'}"
+			f"markers found: {sorted({m.lower() for m in matches}) or 'none'}"
 		)
 
 		log.debug(
@@ -550,7 +566,9 @@ class PidginYorubaQualityGate:
 			confidence=round(confidence, 3),
 		)
 
-		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, marker_rate=rate)
+		return QualityGateResult(
+			passed=passed, confidence=confidence, reason=reason, marker_rate=rate
+		)
 
 	# ── Twi / Akan ────────────────────────────────────────────────────────────
 
@@ -595,4 +613,6 @@ class PidginYorubaQualityGate:
 			confidence=round(confidence, 3),
 		)
 
-		return QualityGateResult(passed=passed, confidence=confidence, reason=reason, char_density=density)
+		return QualityGateResult(
+			passed=passed, confidence=confidence, reason=reason, char_density=density
+		)

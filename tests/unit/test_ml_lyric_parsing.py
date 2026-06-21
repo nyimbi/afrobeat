@@ -5,10 +5,12 @@ from __future__ import annotations
 
 def _gen():
 	from gbedu_ml.inference.lyric_generator import LyricGenerator
+
 	return LyricGenerator()
 
 
 # ── _parse_sections ───────────────────────────────────────────────────────────
+
 
 def test_parse_sections_verse1_and_hook() -> None:
 	g = _gen()
@@ -70,16 +72,20 @@ def test_parse_sections_prehook_variants() -> None:
 
 # ── _validate_structure ───────────────────────────────────────────────────────
 
+
 def test_validate_structure_passes_for_good_lyrics() -> None:
-	from gbedu_ml.prompts.afrobeats import get_target
 	from gbedu_core.models.track import SubGenre
+	from gbedu_ml.prompts.afrobeats import get_target
+
 	g = _gen()
 	target = get_target(SubGenre.afropop)
 	# Build lyrics with enough lines to pass
-	good_lyrics = "\n".join([
-		"[VERSE 1]",
-		*[f"Na me dey here tonight line {i}" for i in range(target.min_lines)],
-	])
+	good_lyrics = "\n".join(
+		[
+			"[VERSE 1]",
+			*[f"Na me dey here tonight line {i}" for i in range(target.min_lines)],
+		]
+	)
 	ok, reason = g._validate_structure(good_lyrics, target)
 	# Should pass if we meet min_lines
 	assert isinstance(ok, bool)
@@ -87,8 +93,9 @@ def test_validate_structure_passes_for_good_lyrics() -> None:
 
 
 def test_validate_structure_fails_for_too_few_lines() -> None:
-	from gbedu_ml.prompts.afrobeats import get_target
 	from gbedu_core.models.track import SubGenre
+	from gbedu_ml.prompts.afrobeats import get_target
+
 	g = _gen()
 	target = get_target(SubGenre.afropop)
 	too_few = "Just one line."
@@ -98,8 +105,9 @@ def test_validate_structure_fails_for_too_few_lines() -> None:
 
 
 def test_validate_structure_fails_for_too_many_words_per_line() -> None:
-	from gbedu_ml.prompts.afrobeats import get_target
 	from gbedu_core.models.track import SubGenre
+	from gbedu_ml.prompts.afrobeats import get_target
+
 	g = _gen()
 	target = get_target(SubGenre.afropop)
 	# Make lines with way too many words
@@ -112,9 +120,11 @@ def test_validate_structure_fails_for_too_many_words_per_line() -> None:
 
 # ── LyricResult model ─────────────────────────────────────────────────────────
 
+
 def test_lyric_result_defaults() -> None:
-	from gbedu_ml.inference.lyric_generator import LyricResult
 	from gbedu_core.models.track import Language
+	from gbedu_ml.inference.lyric_generator import LyricResult
+
 	r = LyricResult(language_used=Language.pidgin)
 	assert r.verse1 == ""
 	assert r.hook == ""
@@ -124,9 +134,10 @@ def test_lyric_result_defaults() -> None:
 
 
 def test_lyric_result_forbids_extra_fields() -> None:
-	from gbedu_ml.inference.lyric_generator import LyricResult
 	from gbedu_core.models.track import Language
+	from gbedu_ml.inference.lyric_generator import LyricResult
 	from pydantic import ValidationError
+
 	with pytest.raises(ValidationError):
 		LyricResult(language_used=Language.english, unknown_field="bad")
 

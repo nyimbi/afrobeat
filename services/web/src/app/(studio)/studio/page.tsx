@@ -69,9 +69,6 @@ const SUB_GENRE_GROUPS: { region: string; genres: { id: SubGenre; label: string;
 	},
 ]
 
-// Flat list derived from groups — used for display labels and lookups
-const SUB_GENRES = SUB_GENRE_GROUPS.flatMap((g) => g.genres)
-
 const LANGUAGES: { id: Language; label: string; flag: string }[] = [
 	{ id: "english", label: "English", flag: "🇬🇧" },
 	{ id: "pidgin",  label: "Pidgin",  flag: "🇳🇬" },

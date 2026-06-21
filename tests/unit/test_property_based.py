@@ -8,6 +8,7 @@ Run:
 	uv run pytest tests/unit/test_property_based.py -v
 	uv run pytest tests/unit/test_property_based.py --hypothesis-show-statistics
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -15,9 +16,6 @@ import re
 import string
 
 import pytest
-from hypothesis import assume, given, settings
-from hypothesis import strategies as st
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.security import (
 	create_access_token,
@@ -25,12 +23,12 @@ from gbedu_core.security import (
 	verify_access_token,
 	verify_password,
 )
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 # ── UUID7 invariants ───────────────────────────────────────────────────────────
 
-UUID_RE = re.compile(
-	r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 def test_uuid7_format_always_valid() -> None:
@@ -53,6 +51,7 @@ def test_uuid7_globally_unique() -> None:
 
 
 # ── Password hashing invariants ────────────────────────────────────────────────
+
 
 @given(
 	password=st.text(
@@ -86,6 +85,7 @@ def test_different_passwords_never_verify(pw1: str, pw2: str) -> None:
 
 
 # ── BPM validation invariants ──────────────────────────────────────────────────
+
 
 @given(bpm=st.integers(min_value=60, max_value=200))
 @settings(max_examples=50)
@@ -128,6 +128,7 @@ def test_invalid_bpm_always_rejected(bpm: int) -> None:
 
 # ── Quota enforcement invariants ───────────────────────────────────────────────
 
+
 @given(
 	limit=st.integers(min_value=1, max_value=100),
 	total=st.integers(min_value=1, max_value=200),
@@ -160,7 +161,8 @@ _ALG = "HS256"
 def test_access_token_encodes_user_id(user_id: str, expires_minutes: int) -> None:
 	"""verify_access_token must always return the original sub claim."""
 	token = create_access_token(user_id, _SECRET_A, _ALG, expires_minutes=expires_minutes)
-	assert isinstance(token, str) and token
+	assert isinstance(token, str)
+	assert token
 
 	payload = verify_access_token(token, _SECRET_A, _ALG)
 	assert payload["sub"] == user_id
@@ -180,6 +182,7 @@ def test_token_with_wrong_secret_rejected(user_id: str) -> None:
 
 
 # ── Token hash determinism ─────────────────────────────────────────────────────
+
 
 @given(token=st.binary(min_size=1, max_size=512))
 @settings(max_examples=50)
@@ -204,6 +207,7 @@ def test_different_tokens_have_different_hashes(t1: bytes, t2: bytes) -> None:
 
 # ── Afrobeats prompt invariants ────────────────────────────────────────────────
 
+
 @given(
 	sub_genre=st.sampled_from(["afrobeats", "afropop", "amapiano_cross", "afrobeats_uk"]),
 	language=st.sampled_from(["english", "yoruba", "pidgin", "igbo"]),
@@ -211,9 +215,7 @@ def test_different_tokens_have_different_hashes(t1: bytes, t2: bytes) -> None:
 	duration=st.integers(min_value=30, max_value=240),
 )
 @settings(max_examples=30)
-def test_prompt_always_non_empty(
-	sub_genre: str, language: str, bpm: int, duration: int
-) -> None:
+def test_prompt_always_non_empty(sub_genre: str, language: str, bpm: int, duration: int) -> None:
 	"""build_music_prompt must always return a non-empty string."""
 	from gbedu_core.models.track import Language, SubGenre
 	from gbedu_core.schemas import GenerationRequest

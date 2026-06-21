@@ -6,12 +6,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _make_user(user_id: str = "user-1", email: str = "a@b.com", full_name: str = "Amara Nwosu") -> MagicMock:
+
+def _make_user(
+	user_id: str = "user-1", email: str = "a@b.com", full_name: str = "Amara Nwosu"
+) -> MagicMock:
 	u = MagicMock()
 	u.id = user_id
 	u.email = email
@@ -48,6 +48,7 @@ def _session_mock(get_side_effects: list[Any]) -> tuple[MagicMock, Any]:
 
 
 # ── _send_generation_complete ──────────────────────────────────────────────
+
 
 async def test_send_generation_complete_duplicate_skipped() -> None:
 	from gbedu_worker.tasks.notifications import _send_generation_complete
@@ -110,6 +111,7 @@ async def test_send_generation_complete_happy_path() -> None:
 
 # ── _send_welcome ──────────────────────────────────────────────────────────
 
+
 async def test_send_welcome_duplicate_skipped() -> None:
 	from gbedu_worker.tasks.notifications import _send_welcome
 
@@ -154,6 +156,7 @@ async def test_send_welcome_happy_path() -> None:
 
 
 # ── _send_verify_email ─────────────────────────────────────────────────────
+
 
 async def test_send_verify_email_duplicate_skipped() -> None:
 	from gbedu_worker.tasks.notifications import _send_verify_email
@@ -200,6 +203,7 @@ async def test_send_verify_email_happy_path() -> None:
 
 
 # ── _send_password_reset ───────────────────────────────────────────────────
+
 
 async def test_send_password_reset_duplicate_skipped() -> None:
 	from gbedu_worker.tasks.notifications import _send_password_reset
@@ -251,6 +255,7 @@ async def test_send_password_reset_happy_path() -> None:
 
 # ── _send_subscription_confirmation ───────────────────────────────────────
 
+
 async def test_send_subscription_confirmation_duplicate_skipped() -> None:
 	from gbedu_worker.tasks.notifications import _send_subscription_confirmation
 
@@ -296,6 +301,7 @@ async def test_send_subscription_confirmation_happy_path() -> None:
 
 
 # ── retry countdown ────────────────────────────────────────────────────────
+
 
 def test_email_retry_countdown_values() -> None:
 	from gbedu_worker.tasks.notifications import _email_retry_countdown

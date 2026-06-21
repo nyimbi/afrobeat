@@ -7,20 +7,21 @@ conftest.py).  Redis is replaced with an in-memory FakeRedis instance.
 
 Import convention: gbedu_api.* (service installed as editable package via uv workspace).
 """
+
 from __future__ import annotations
 
+import itertools
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import itertools
 import fakeredis.aioredis
 import httpx
 import pytest
 import pytest_asyncio
 from jose import jwt as jose_jwt
 from sqlalchemy.ext.asyncio import AsyncSession
-from unittest.mock import AsyncMock, MagicMock, patch
 
 # Each fixture invocation gets its own source IP so rate limit buckets never
 # bleed across tests — all tests share the same in-process MemoryStorage backend.
@@ -57,6 +58,7 @@ def _reg_body(
 
 # ── HTTP client fixture with DB + Redis overrides ─────────────────────────────
 
+
 @pytest_asyncio.fixture
 async def http_client(
 	test_db_session: AsyncSession,
@@ -67,8 +69,8 @@ async def http_client(
 	Each test gets its own FakeRedis so state never leaks between tests.
 	The DB session rolls back via the savepoint in test_db_session.
 	"""
-	from gbedu_api.main import create_app
 	from gbedu_api.deps import get_db, get_redis
+	from gbedu_api.main import create_app
 
 	# OTel instrument_app crashes with _IncludedRouter in test transport — disable it.
 	with patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"):
@@ -108,6 +110,7 @@ async def http_client(
 
 # ── 1. Register → login → /me full flow ───────────────────────────────────────
 
+
 async def test_register_and_login_full_flow(http_client: httpx.AsyncClient) -> None:
 	body = _reg_body()
 
@@ -145,6 +148,7 @@ async def test_register_and_login_full_flow(http_client: httpx.AsyncClient) -> N
 
 # ── 2. Wrong password → 401 ────────────────────────────────────────────────────
 
+
 async def test_login_wrong_password_returns_401(http_client: httpx.AsyncClient) -> None:
 	body = _reg_body()
 	reg = await http_client.post(_REGISTER_URL, json=body)
@@ -159,6 +163,7 @@ async def test_login_wrong_password_returns_401(http_client: httpx.AsyncClient) 
 
 # ── 3. Unknown email → 401 (no enumeration) ───────────────────────────────────
 
+
 async def test_login_nonexistent_user_returns_401(http_client: httpx.AsyncClient) -> None:
 	resp = await http_client.post(
 		_LOGIN_URL,
@@ -168,6 +173,7 @@ async def test_login_nonexistent_user_returns_401(http_client: httpx.AsyncClient
 
 
 # ── 4. Duplicate email → 409 ──────────────────────────────────────────────────
+
 
 async def test_register_duplicate_email_returns_409(http_client: httpx.AsyncClient) -> None:
 	body = _reg_body()
@@ -180,6 +186,7 @@ async def test_register_duplicate_email_returns_409(http_client: httpx.AsyncClie
 
 # ── 5. No auth header → 401 ───────────────────────────────────────────────────
 
+
 async def test_protected_endpoint_without_token_returns_401(
 	http_client: httpx.AsyncClient,
 ) -> None:
@@ -188,6 +195,7 @@ async def test_protected_endpoint_without_token_returns_401(
 
 
 # ── 6. Expired JWT → 401 ──────────────────────────────────────────────────────
+
 
 async def test_protected_endpoint_with_expired_token_returns_401(
 	http_client: httpx.AsyncClient,
@@ -212,6 +220,7 @@ async def test_protected_endpoint_with_expired_token_returns_401(
 
 
 # ── 7. Token refresh flow ─────────────────────────────────────────────────────
+
 
 async def test_token_refresh_flow(http_client: httpx.AsyncClient) -> None:
 	body = _reg_body()
@@ -248,6 +257,7 @@ async def test_token_refresh_flow(http_client: httpx.AsyncClient) -> None:
 
 # ── 8. Logout revokes refresh token ──────────────────────────────────────────
 
+
 async def test_logout_revokes_refresh_token(http_client: httpx.AsyncClient) -> None:
 	body = _reg_body()
 	reg = await http_client.post(_REGISTER_URL, json=body)
@@ -276,6 +286,7 @@ async def test_logout_revokes_refresh_token(http_client: httpx.AsyncClient) -> N
 
 
 # ── 9. Stats endpoint returns correct daily quota ─────────────────────────────
+
 
 async def test_get_stats_returns_correct_daily_quota(
 	http_client: httpx.AsyncClient,
@@ -310,6 +321,7 @@ async def test_get_stats_returns_correct_daily_quota(
 
 # ── 10. Health endpoint ───────────────────────────────────────────────────────
 
+
 async def test_health_endpoint(http_client: httpx.AsyncClient) -> None:
 	resp = await http_client.get(_HEALTH_URL)
 	assert resp.status_code == 200, resp.text
@@ -320,6 +332,7 @@ async def test_health_endpoint(http_client: httpx.AsyncClient) -> None:
 
 
 # ── 11. Rate limit enforced on login ─────────────────────────────────────────
+
 
 async def test_rate_limit_enforced_on_login(http_client: httpx.AsyncClient) -> None:
 	"""Fire more than RATE_LIMIT_LOGIN (20/minute) login attempts and expect a 429.

@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import boto3
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
 from circuitbreaker import CircuitBreaker, CircuitBreakerError
-
 from gbedu_core.config import StorageSettings
 from gbedu_core.errors import StorageDeleteError, StorageError, StorageUploadError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 log = structlog.get_logger(__name__)
 
@@ -21,12 +20,16 @@ log = structlog.get_logger(__name__)
 _STORAGE_CIRCUIT_FAILURE_THRESHOLD = 5
 _STORAGE_CIRCUIT_RECOVERY_TIMEOUT = 60
 
-_RETRY_KWARGS: dict[str, Any] = dict(
-	retry=retry_if_exception_type((BotoCoreError, ClientError)),
-	wait=wait_exponential(multiplier=1, min=1, max=10),
-	stop=stop_after_attempt(3),
-	reraise=True,
-)
+_RETRY_KWARGS: dict[str, Any] = {
+	"retry": retry_if_exception_type((BotoCoreError, ClientError)),
+	"wait": wait_exponential(multiplier=1, min=1, max=10),
+	"stop": stop_after_attempt(3),
+	"reraise": True,
+}
+
+
+def _storage_retry[F: Callable[..., Any]](func: F) -> F:
+	return cast(F, retry(**_RETRY_KWARGS)(func))
 
 
 class LocalStorageClient:
@@ -41,11 +44,14 @@ class LocalStorageClient:
 		self._root.mkdir(parents=True, exist_ok=True)
 		log.warning("storage.local_mode", root=str(self._root))
 
-	async def upload_audio(self, file_path: Path, key: str, content_type: str = "audio/mpeg") -> str:
+	async def upload_audio(
+		self, file_path: Path, key: str, content_type: str = "audio/mpeg"
+	) -> str:
 		assert file_path.exists(), f"file not found: {file_path}"
 		dest = self._root / key
 		dest.parent.mkdir(parents=True, exist_ok=True)
 		import shutil
+
 		shutil.copy2(file_path, dest)
 		url = f"file://{dest}"
 		log.info("storage.local.uploaded", key=key, url=url)
@@ -76,14 +82,14 @@ class StorageClient:
 
 		self._bucket = settings.r2_bucket_name
 		self._public_url = settings.r2_public_url.rstrip("/")
-		self._client = boto3.client(
+		self._client: Any = cast(Any, boto3).client(
 			"s3",
 			endpoint_url=settings.r2_endpoint_url,
 			aws_access_key_id=settings.r2_access_key_id,
 			aws_secret_access_key=settings.r2_secret_access_key,
 			region_name="auto",
 		)
-		self._circuit = CircuitBreaker(
+		self._circuit: Any = CircuitBreaker(
 			failure_threshold=_STORAGE_CIRCUIT_FAILURE_THRESHOLD,
 			recovery_timeout=_STORAGE_CIRCUIT_RECOVERY_TIMEOUT,
 			name="storage",
@@ -101,7 +107,7 @@ class StorageClient:
 
 		log.info("storage.upload.start", key=key, path=str(file_path))
 
-		@retry(**_RETRY_KWARGS)
+		@_storage_retry
 		def _upload() -> None:
 			with open(file_path, "rb") as fh:
 				self._client.upload_fileobj(
@@ -113,10 +119,13 @@ class StorageClient:
 
 		try:
 			loop = asyncio.get_event_loop()
-			await loop.run_in_executor(None, self._circuit(_upload))
+			protected_upload = cast(Callable[[], None], self._circuit(_upload))
+			await loop.run_in_executor(None, protected_upload)
 		except CircuitBreakerError as exc:
 			log.error("storage.circuit_open", key=key)
-			raise StorageUploadError("Storage circuit breaker open — R2 unavailable", path=key) from exc
+			raise StorageUploadError(
+				"Storage circuit breaker open — R2 unavailable", path=key
+			) from exc
 		except (BotoCoreError, ClientError) as exc:
 			log.error("storage.upload.failed", key=key, error=str(exc))
 			raise StorageUploadError(f"Failed to upload {key}", path=key) from exc
@@ -130,17 +139,20 @@ class StorageClient:
 		assert key, "key must not be empty"
 		assert expires_in > 0, "expires_in must be positive"
 
-		@retry(**_RETRY_KWARGS)
+		@_storage_retry
 		def _presign() -> str:
-			return self._client.generate_presigned_url(
-				"get_object",
-				Params={"Bucket": self._bucket, "Key": key},
-				ExpiresIn=expires_in,
+			return str(
+				self._client.generate_presigned_url(
+					"get_object",
+					Params={"Bucket": self._bucket, "Key": key},
+					ExpiresIn=expires_in,
+				)
 			)
 
 		try:
 			loop = asyncio.get_event_loop()
-			url = await loop.run_in_executor(None, self._circuit(_presign))
+			protected_presign = cast(Callable[[], str], self._circuit(_presign))
+			url = await loop.run_in_executor(None, protected_presign)
 		except CircuitBreakerError as exc:
 			log.error("storage.circuit_open", key=key)
 			raise StorageError("Storage circuit breaker open — R2 unavailable", path=key) from exc
@@ -154,16 +166,19 @@ class StorageClient:
 		"""Delete an object from R2. Idempotent — 404 is not an error."""
 		assert key, "key must not be empty"
 
-		@retry(**_RETRY_KWARGS)
+		@_storage_retry
 		def _delete() -> None:
 			self._client.delete_object(Bucket=self._bucket, Key=key)
 
 		try:
 			loop = asyncio.get_event_loop()
-			await loop.run_in_executor(None, self._circuit(_delete))
+			protected_delete = cast(Callable[[], None], self._circuit(_delete))
+			await loop.run_in_executor(None, protected_delete)
 		except CircuitBreakerError as exc:
 			log.error("storage.circuit_open", key=key)
-			raise StorageDeleteError("Storage circuit breaker open — R2 unavailable", path=key) from exc
+			raise StorageDeleteError(
+				"Storage circuit breaker open — R2 unavailable", path=key
+			) from exc
 		except (BotoCoreError, ClientError) as exc:
 			log.error("storage.delete.failed", key=key, error=str(exc))
 			raise StorageDeleteError(f"Failed to delete {key}", path=key) from exc

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any
 
 import structlog
 from structlog.types import EventDict, WrappedLogger
@@ -15,8 +16,8 @@ def _add_service_info(
 	event_dict: EventDict,
 ) -> EventDict:
 	"""Inject service_name and environment into every log record."""
-	event_dict.setdefault("service", _SERVICE_NAME)
-	event_dict.setdefault("environment", _ENVIRONMENT)
+	event_dict.setdefault("service", _service_name)
+	event_dict.setdefault("environment", _environment)
 	return event_dict
 
 
@@ -30,24 +31,26 @@ def _drop_color_message_key(
 	return event_dict
 
 
-_SERVICE_NAME: str = "gbedu"
-_ENVIRONMENT: str = "development"
-_CONFIGURED: bool = False
+_service_name: str = "gbedu"
+_environment: str = "development"
+_configured: bool = False
 
 
-def configure_logging(service_name: str, level: str = "INFO", *, environment: str = "development") -> None:
+def configure_logging(
+	service_name: str, level: str = "INFO", *, environment: str = "development"
+) -> None:
 	"""Configure structlog once at process startup.
 
 	Subsequent calls are no-ops so safe to call from multiple entry points.
 	"""
-	global _SERVICE_NAME, _ENVIRONMENT, _CONFIGURED
+	global _service_name, _environment, _configured
 
-	if _CONFIGURED:
+	if _configured:
 		return
 
-	_SERVICE_NAME = service_name
-	_ENVIRONMENT = environment
-	_CONFIGURED = True
+	_service_name = service_name
+	_environment = environment
+	_configured = True
 
 	log_level = getattr(logging, level.upper(), logging.INFO)
 	is_production = environment == "production"

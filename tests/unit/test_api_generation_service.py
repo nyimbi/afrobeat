@@ -2,14 +2,16 @@ from __future__ import annotations
 
 """Unit tests for GenerationService — mocked DB and Redis."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
+
 def _mock_user(tier: str = "free", verified: bool = True):
-	from gbedu_core.models.user import User, SubscriptionTier
+	from gbedu_core.models.user import SubscriptionTier, User
+
 	u = MagicMock(spec=User)
 	u.id = "user-aaa-111"
 	u.subscription_tier = SubscriptionTier(tier)
@@ -44,26 +46,27 @@ def _mock_redis():
 
 def _make_service(db=None, redis=None):
 	from gbedu_api.services.generation_service import GenerationService
+
 	return GenerationService(db or _mock_session(), redis or _mock_redis())
 
 
 def _make_request(**kwargs):
-	from gbedu_api.services.ml_client import GenerationRequest
-	defaults = dict(
-		prompt="Afrobeats love song in Yoruba",
-		sub_genre="afropop",
-		language="yoruba",
-		bpm=None,
-		energy_level=None,
-		voice_model_id=None,
-		duration_seconds=30,
-	)
+	defaults = {
+		"prompt": "Afrobeats love song in Yoruba",
+		"sub_genre": "afropop",
+		"language": "yoruba",
+		"bpm": None,
+		"energy_level": None,
+		"voice_model_id": None,
+		"duration_seconds": 30,
+	}
 	defaults.update(kwargs)
 	return MagicMock(**defaults)
 
 
 def _mock_job(job_id: str = "job-001", user_id: str = "user-aaa-111", status: str = "queued"):
 	from gbedu_core.models.job import GenerationJob, JobStatus
+
 	job = MagicMock(spec=GenerationJob)
 	job.id = job_id
 	job.user_id = user_id
@@ -73,6 +76,7 @@ def _mock_job(job_id: str = "job-001", user_id: str = "user-aaa-111", status: st
 
 
 # ── _check_and_increment_quota ─────────────────────────────────────────────────
+
 
 async def test_check_quota_increments_redis_on_success() -> None:
 	db = _mock_session()
@@ -90,6 +94,7 @@ async def test_check_quota_increments_redis_on_success() -> None:
 
 async def test_check_quota_raises_when_db_returns_no_row() -> None:
 	from gbedu_core.errors import GenerationQuotaError
+
 	db = _mock_session()
 	db.execute.return_value.fetchone.return_value = None  # quota exhausted
 
@@ -123,6 +128,7 @@ async def test_check_quota_skips_redis_expire_when_key_already_exists() -> None:
 
 # ── submit_job ─────────────────────────────────────────────────────────────────
 
+
 async def test_submit_job_returns_generation_job() -> None:
 	db = _mock_session()
 	redis = _mock_redis()
@@ -142,6 +148,7 @@ async def test_submit_job_returns_generation_job() -> None:
 
 async def test_submit_job_raises_when_unverified() -> None:
 	from gbedu_core.errors import AuthorizationError
+
 	svc = _make_service()
 	user = _mock_user(verified=False)
 
@@ -172,6 +179,7 @@ async def test_submit_job_raises_on_null_user() -> None:
 
 # ── get_job_status ─────────────────────────────────────────────────────────────
 
+
 async def test_get_job_status_returns_job() -> None:
 	db = _mock_session()
 	job = _mock_job()
@@ -185,6 +193,7 @@ async def test_get_job_status_returns_job() -> None:
 
 async def test_get_job_status_raises_not_found() -> None:
 	from gbedu_core.errors import NotFoundError
+
 	db = _mock_session()
 	db.execute.return_value.scalar_one_or_none.return_value = None
 
@@ -195,6 +204,7 @@ async def test_get_job_status_raises_not_found() -> None:
 
 async def test_get_job_status_raises_when_wrong_user() -> None:
 	from gbedu_core.errors import AuthorizationError
+
 	db = _mock_session()
 	job = _mock_job(user_id="other-user")
 	db.execute.return_value.scalar_one_or_none.return_value = job
@@ -205,6 +215,7 @@ async def test_get_job_status_raises_when_wrong_user() -> None:
 
 
 # ── cancel_job ────────────────────────────────────────────────────────────────
+
 
 async def test_cancel_job_sets_status_cancelled() -> None:
 	db = _mock_session()
@@ -222,6 +233,7 @@ async def test_cancel_job_sets_status_cancelled() -> None:
 
 async def test_cancel_job_raises_when_already_terminal() -> None:
 	from gbedu_core.errors import WorkerError
+
 	db = _mock_session()
 	job = _mock_job(status="complete")  # JobStatus.complete is terminal
 	db.execute.return_value.scalar_one_or_none.return_value = job
@@ -273,6 +285,7 @@ async def test_cancel_job_decrements_redis_quota() -> None:
 
 
 # ── list_jobs ─────────────────────────────────────────────────────────────────
+
 
 async def test_list_jobs_returns_jobs_and_total() -> None:
 	db = _mock_session()

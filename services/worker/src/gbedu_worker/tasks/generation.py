@@ -7,18 +7,18 @@ The task body is synchronous (Celery default). All async work is driven via
 """
 
 import traceback as tb
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, cast
 
 import sqlalchemy as sa
 import structlog
 from celery import Task
 from celery.exceptions import MaxRetriesExceededError
-from opentelemetry import trace
-
 from gbedu_core.models.job import GenerationJob, JobStatus
 from gbedu_core.telemetry import get_tracer
-from gbedu_worker.celery_app import app
+from opentelemetry import trace
+
+from gbedu_worker.celery_app import celery_task, retry_task
 from gbedu_worker.db import get_async_session, run_async
 from gbedu_worker.exceptions import MLServiceError, UploadError
 from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
@@ -33,7 +33,7 @@ _RETRYABLE_EXCEPTIONS = (MLServiceError, UploadError, ConnectionError, TimeoutEr
 _RETRY_COUNTDOWN = (30, 90, 270)
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.generation.run_generation_pipeline",
 	max_retries=3,
@@ -59,12 +59,12 @@ def run_generation_pipeline(self: Task, job_id: str) -> dict[str, Any]:
 		span.set_attribute("celery.task_id", self.request.id or "")
 
 		try:
-			result = run_async(_run_pipeline(job_id))
+			result = run_async(_run_pipeline, job_id)
 			span.set_attribute("job.result_status", result.get("status", "unknown"))
 			return result
 
 		except _RETRYABLE_EXCEPTIONS as exc:
-			retry_num = self.request.retries
+			retry_num = int(self.request.retries or 0)
 			countdown = _RETRY_COUNTDOWN[min(retry_num, len(_RETRY_COUNTDOWN) - 1)]
 			task_log.warning(
 				"retryable error — scheduling retry",
@@ -75,7 +75,7 @@ def run_generation_pipeline(self: Task, job_id: str) -> dict[str, Any]:
 			)
 			span.record_exception(exc)
 			try:
-				raise self.retry(exc=exc, countdown=countdown)
+				retry_task(self, exc=exc, countdown=countdown)
 			except MaxRetriesExceededError:
 				task_log.error(
 					"max retries exceeded — routing to DLQ",
@@ -88,7 +88,7 @@ def run_generation_pipeline(self: Task, job_id: str) -> dict[str, Any]:
 					if self.request.delivery_info
 					else "default",
 					exc=exc,
-					retry_count=self.request.retries,
+					retry_count=retry_num,
 					task_log=task_log,
 				)
 				raise
@@ -105,7 +105,7 @@ def run_generation_pipeline(self: Task, job_id: str) -> dict[str, Any]:
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
 			try:
-				run_async(_mark_job_failed(job_id, exc))
+				run_async(_mark_job_failed, job_id, exc)
 			except Exception as db_exc:
 				task_log.error("failed to mark job as failed in DB", db_exc=str(db_exc))
 			raise
@@ -125,7 +125,7 @@ async def _mark_job_failed(job_id: str, exc: Exception) -> None:
 			job.status = JobStatus.failed
 			job.error_message = str(exc)
 			job.error_traceback = tb.format_exc()
-			job.completed_at = datetime.now(timezone.utc)
+			job.completed_at = datetime.now(UTC)
 			await session.commit()
 
 
@@ -148,7 +148,7 @@ def _route_to_dlq(
 	from gbedu_worker.tasks.dlq import process_dlq_message  # noqa: PLC0415
 
 	try:
-		process_dlq_message.apply_async(
+		cast(Any, process_dlq_message).apply_async(
 			kwargs={
 				"job_id": job_id,
 				"original_task_id": original_task_id,

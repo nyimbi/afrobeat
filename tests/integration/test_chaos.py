@@ -15,23 +15,23 @@ Infrastructure pattern mirrors test_api_http.py:
 
 All tests are marked @pytest.mark.integration.
 """
+
 from __future__ import annotations
 
 import asyncio
 import itertools
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Never
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import fakeredis.aioredis
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.models.user import SubscriptionTier
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.integration
 
@@ -49,6 +49,7 @@ _ip_counter = itertools.count(10_000)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _unique_ip() -> str:
 	n = next(_ip_counter)
@@ -89,6 +90,7 @@ def _mock_email_service() -> MagicMock:
 
 # ── Base fixture factory ───────────────────────────────────────────────────────
 
+
 def _make_app(
 	db_override: Any | None = None,
 	redis_override: Any | None = None,
@@ -99,8 +101,8 @@ def _make_app(
 	Accepts callables (for overrides that need to be async generators) or plain
 	values; wraps plain values in a lambda automatically.
 	"""
+	from gbedu_api.deps import get_db, get_ml_client, get_redis
 	from gbedu_api.main import create_app
-	from gbedu_api.deps import get_db, get_redis, get_ml_client
 
 	with patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"):
 		app = create_app()
@@ -117,6 +119,7 @@ def _make_app(
 
 # ── Standard chaos fixture (DB + Redis working, ML working) ───────────────────
 
+
 @pytest_asyncio.fixture
 async def chaos_client(
 	test_db_session: AsyncSession,
@@ -128,6 +131,7 @@ async def chaos_client(
 
 	with patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"):
 		from gbedu_api.main import create_app
+
 		app = create_app()
 
 	async def _db() -> AsyncGenerator[AsyncSession, None]:
@@ -156,15 +160,15 @@ async def chaos_client(
 
 # ── 1. /ready → 503 when DB is unavailable ────────────────────────────────────
 
+
 @pytest.mark.integration
 async def test_health_returns_503_when_db_is_unavailable(
 	test_redis: fakeredis.aioredis.FakeRedis,
 ) -> None:
 	"""Override get_db to raise OperationalError; /ready must return 503 with
 	a 'database' key in the checks dict showing an error message."""
-	from gbedu_api.deps import get_db, get_redis
 
-	def _failing_db():
+	def _failing_db() -> Never:
 		raise OperationalError("connection refused", None, None)
 
 	async def _redis() -> fakeredis.aioredis.FakeRedis:
@@ -176,6 +180,7 @@ async def test_health_returns_503_when_db_is_unavailable(
 	mock_ml = MagicMock()
 	mock_ml.get_health = AsyncMock(return_value=True)
 	from gbedu_api.deps import get_ml_client
+
 	app.dependency_overrides[get_ml_client] = lambda: mock_ml
 
 	unique_ip = _unique_ip()
@@ -199,12 +204,12 @@ async def test_health_returns_503_when_db_is_unavailable(
 
 # ── 2. /ready → 503 when Redis is unavailable ─────────────────────────────────
 
+
 @pytest.mark.integration
 async def test_health_returns_503_when_redis_is_unavailable(
 	test_db_session: AsyncSession,
 ) -> None:
 	"""Override get_redis to return a broken Redis client; /ready must return 503."""
-	from gbedu_api.deps import get_db, get_redis
 
 	async def _db() -> AsyncGenerator[AsyncSession, None]:
 		yield test_db_session
@@ -220,6 +225,7 @@ async def test_health_returns_503_when_redis_is_unavailable(
 	mock_ml.get_health = AsyncMock(return_value=True)
 
 	from gbedu_api.deps import get_ml_client
+
 	app = _make_app(db_override=_db, redis_override=_broken_redis)
 	app.dependency_overrides[get_ml_client] = lambda: mock_ml
 
@@ -241,6 +247,7 @@ async def test_health_returns_503_when_redis_is_unavailable(
 
 # ── 3. ML down → /health 200, /ready 503 ─────────────────────────────────────
 
+
 @pytest.mark.integration
 async def test_health_200_when_ml_down_but_ready_503(
 	test_db_session: AsyncSession,
@@ -248,7 +255,6 @@ async def test_health_200_when_ml_down_but_ready_503(
 ) -> None:
 	"""ML service returning is_healthy=False is non-critical for /health (liveness)
 	but does cause /ready (readiness) to return 503 because it signals degradation."""
-	from gbedu_api.deps import get_db, get_redis, get_ml_client
 
 	async def _db() -> AsyncGenerator[AsyncSession, None]:
 		yield test_db_session
@@ -284,13 +290,13 @@ async def test_health_200_when_ml_down_but_ready_503(
 
 # ── 4. Rate limiter fails open when Redis raises ──────────────────────────────
 
+
 @pytest.mark.integration
 async def test_rate_limiter_fails_open_on_redis_error(
 	test_db_session: AsyncSession,
 ) -> None:
 	"""When Redis raises ConnectionError on every call the rate limiter must
 	fail open — the request must complete with 200 or 401, never 500."""
-	from gbedu_api.deps import get_db, get_redis, get_ml_client
 
 	async def _db() -> AsyncGenerator[AsyncSession, None]:
 		yield test_db_session
@@ -340,6 +346,7 @@ async def test_rate_limiter_fails_open_on_redis_error(
 
 # ── 5. DB OperationalError on any endpoint → 503, not 500, no traceback ───────
 
+
 @pytest.mark.integration
 async def test_db_operational_error_returns_503_not_500(
 	test_redis: fakeredis.aioredis.FakeRedis,
@@ -347,7 +354,6 @@ async def test_db_operational_error_returns_503_not_500(
 	"""Any endpoint that queries the DB must return 503 (service unavailable)
 	when the DB raises OperationalError — not 500 (internal server error) — and
 	the response body must contain no traceback."""
-	from gbedu_api.deps import get_db, get_redis, get_ml_client
 
 	# DB always raises OperationalError (simulates connection loss mid-request)
 	async def _failing_db() -> AsyncGenerator[AsyncSession, None]:
@@ -390,6 +396,7 @@ async def test_db_operational_error_returns_503_not_500(
 
 # ── 6. Registration uniqueness enforced by DB unique constraint ───────────────
 
+
 @pytest.mark.integration
 async def test_concurrent_registration_idempotency(
 	test_db_session: AsyncSession,
@@ -402,9 +409,9 @@ async def test_concurrent_registration_idempotency(
 	produce InvalidRequestError rather than 409. This test validates the actual
 	correctness guarantee — the uniqueness constraint — at the correct layer.
 	"""
-	from sqlalchemy.exc import IntegrityError
-	from gbedu_core.models.user import User, SubscriptionTier, SubscriptionStatus
+	from gbedu_core.models.user import SubscriptionStatus, User
 	from gbedu_core.security import hash_password
+	from sqlalchemy.exc import IntegrityError
 
 	shared_email = f"race-{uuid7str()}@example.com"
 
@@ -443,6 +450,7 @@ async def test_concurrent_registration_idempotency(
 
 # ── 7. Redis INCR is atomic under concurrent async load ──────────────────────
 
+
 @pytest.mark.integration
 async def test_generation_quota_is_atomic_under_concurrency(
 	test_redis: fakeredis.aioredis.FakeRedis,
@@ -455,7 +463,7 @@ async def test_generation_quota_is_atomic_under_concurrency(
 	access, so quota enforcement at the HTTP layer is tested here at the Redis
 	layer where the guarantee is provided.
 	"""
-	from gbedu_core.models.user import TIER_DAILY_LIMITS, SubscriptionTier
+	from gbedu_core.models.user import TIER_DAILY_LIMITS
 
 	limit = TIER_DAILY_LIMITS[SubscriptionTier.creator]  # 20
 	total_requests = limit + 5  # 25 — 5 must be over-limit
@@ -473,9 +481,7 @@ async def test_generation_quota_is_atomic_under_concurrency(
 	accepted = sum(1 for r in results if r is True)
 	rejected = sum(1 for r in results if r is False)
 
-	assert accepted == limit, (
-		f"Expected exactly {limit} accepted (within quota), got {accepted}"
-	)
+	assert accepted == limit, f"Expected exactly {limit} accepted (within quota), got {accepted}"
 	assert rejected == total_requests - limit, (
 		f"Expected exactly {total_requests - limit} rejected (over quota), got {rejected}"
 	)

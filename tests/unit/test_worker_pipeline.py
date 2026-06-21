@@ -3,19 +3,16 @@ from __future__ import annotations
 """Unit tests for GenerationPipelineOrchestrator and R2Client."""
 
 import json
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from gbedu_core.models.job import GenerationJob, JobStatus
 from gbedu_core.models.track import Track, TrackStatus
 from gbedu_worker.exceptions import MLServiceError, UploadError
 
-
 # ── shared helpers ────────────────────────────────────────────────────────
+
 
 def _make_job(
 	job_id: str = "job-1",
@@ -80,12 +77,14 @@ def _fake_redis(get_return: str | None = None) -> MagicMock:
 
 def _make_orchestrator(job_id: str = "job-1", session: MagicMock | None = None) -> Any:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
+
 	if session is None:
 		session = _make_session()
 	return GenerationPipelineOrchestrator(job_id=job_id, session=session)
 
 
 # ── run(): job not found ───────────────────────────────────────────────────
+
 
 async def test_run_job_not_found_skipped() -> None:
 	session = _make_session(execute_return=None)
@@ -109,6 +108,7 @@ async def test_run_job_already_terminal_skipped() -> None:
 
 # ── run(): happy path ─────────────────────────────────────────────────────
 
+
 async def test_run_happy_path_complete() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
@@ -129,8 +129,14 @@ async def test_run_happy_path_complete() -> None:
 
 	with (
 		patch.object(orch, "_stage_ml_generate", AsyncMock(return_value=ml_result)),
-		patch.object(orch, "_stage_audio_process", AsyncMock(return_value={"artifacts": {"audio": b"x"}, "analysis": {}})),
-		patch.object(orch, "_stage_upload", AsyncMock(return_value={"audio": "https://r2/audio.mp3"})),
+		patch.object(
+			orch,
+			"_stage_audio_process",
+			AsyncMock(return_value={"artifacts": {"audio": b"x"}, "analysis": {}}),
+		),
+		patch.object(
+			orch, "_stage_upload", AsyncMock(return_value={"audio": "https://r2/audio.mp3"})
+		),
 		patch.object(orch, "_stage_create_track", AsyncMock(return_value=track)),
 		patch.object(orch, "_stage_complete", AsyncMock()),
 		patch("redis.asyncio.from_url", AsyncMock(return_value=redis)),
@@ -164,6 +170,7 @@ async def test_run_stage_exception_calls_handle_failure() -> None:
 
 # ── _stage_ml_generate ────────────────────────────────────────────────────
 
+
 async def test_stage_ml_generate_checkpoint_hit() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
@@ -183,7 +190,9 @@ async def test_stage_ml_generate_stored_result_resumed() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
 	stored = {"audio_bytes_b64": "dGVzdA==", "model_used": "ace_step"}
-	job = _make_job(status=JobStatus.audio_processing, metadata={"ml_result": stored, "sub_genre": "afropop"})
+	job = _make_job(
+		status=JobStatus.audio_processing, metadata={"ml_result": stored, "sub_genre": "afropop"}
+	)
 	session = _make_session()
 	orch = GenerationPipelineOrchestrator(job_id="job-1", session=session)
 
@@ -216,10 +225,11 @@ async def test_stage_ml_generate_calls_ml_service() -> None:
 
 # ── _call_ml_service ──────────────────────────────────────────────────────
 
+
 async def test_call_ml_service_success() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
-	job = _make_job()
+	_make_job()
 	session = _make_session()
 	orch = GenerationPipelineOrchestrator(job_id="job-1", session=session)
 
@@ -280,6 +290,7 @@ async def test_call_ml_service_missing_audio_field_raises() -> None:
 
 # ── _stage_upload ─────────────────────────────────────────────────────────
 
+
 async def test_stage_upload_resumes_from_stored_urls() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
@@ -309,6 +320,7 @@ async def test_stage_upload_empty_artifacts_raises() -> None:
 
 
 # ── _stage_create_track ───────────────────────────────────────────────────
+
 
 async def test_stage_create_track_returns_existing_if_linked() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
@@ -341,6 +353,7 @@ async def test_stage_create_track_creates_new() -> None:
 
 # ── _stage_complete ────────────────────────────────────────────────────────
 
+
 async def test_stage_complete_sets_job_and_track_status() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
@@ -360,6 +373,7 @@ async def test_stage_complete_sets_job_and_track_status() -> None:
 
 # ── _handle_failure ────────────────────────────────────────────────────────
 
+
 async def test_handle_failure_marks_job_failed() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
 
@@ -375,6 +389,7 @@ async def test_handle_failure_marks_job_failed() -> None:
 
 
 # ── _checkpoint_set / _checkpoint_get ─────────────────────────────────────
+
 
 async def test_checkpoint_set_writes_to_redis() -> None:
 	from gbedu_worker.pipelines.generation_pipeline import GenerationPipelineOrchestrator
@@ -444,9 +459,10 @@ async def test_publish_progress_redis_failure_is_non_fatal() -> None:
 
 # ── R2Client ──────────────────────────────────────────────────────────────
 
+
 async def test_r2_upload_returns_public_url() -> None:
-	from gbedu_worker.storage import R2Client
 	from gbedu_core.config import StorageSettings
+	from gbedu_worker.storage import R2Client
 
 	settings = MagicMock(spec=StorageSettings)
 	settings.r2_endpoint_url = "https://r2.cloudflare.com"
@@ -471,14 +487,16 @@ async def test_r2_upload_returns_public_url() -> None:
 		patch("boto3.client", return_value=mock_s3),
 		patch("asyncio.get_event_loop", return_value=mock_loop),
 	):
-		url = await client.upload(key="tracks/t1/audio.mp3", data=b"audio", content_type="audio/mpeg")
+		url = await client.upload(
+			key="tracks/t1/audio.mp3", data=b"audio", content_type="audio/mpeg"
+		)
 
 	assert url == "https://cdn.gbedu.io/tracks/t1/audio.mp3"
 
 
 async def test_r2_upload_raises_upload_error_on_failure() -> None:
-	from gbedu_worker.storage import R2Client
 	from gbedu_core.config import StorageSettings
+	from gbedu_worker.storage import R2Client
 
 	settings = MagicMock(spec=StorageSettings)
 	settings.r2_endpoint_url = "https://r2.cloudflare.com"
@@ -508,8 +526,8 @@ async def test_r2_upload_raises_upload_error_on_failure() -> None:
 
 
 async def test_r2_delete_success() -> None:
-	from gbedu_worker.storage import R2Client
 	from gbedu_core.config import StorageSettings
+	from gbedu_worker.storage import R2Client
 
 	settings = MagicMock(spec=StorageSettings)
 	settings.r2_endpoint_url = "https://r2.cloudflare.com"
@@ -540,8 +558,8 @@ async def test_r2_delete_success() -> None:
 
 
 async def test_r2_delete_raises_on_failure() -> None:
-	from gbedu_worker.storage import R2Client
 	from gbedu_core.config import StorageSettings
+	from gbedu_worker.storage import R2Client
 
 	settings = MagicMock(spec=StorageSettings)
 	settings.r2_endpoint_url = "https://r2.cloudflare.com"
@@ -571,8 +589,8 @@ async def test_r2_delete_raises_on_failure() -> None:
 
 
 async def test_r2_generate_presigned_url() -> None:
-	from gbedu_worker.storage import R2Client
 	from gbedu_core.config import StorageSettings
+	from gbedu_worker.storage import R2Client
 
 	settings = MagicMock(spec=StorageSettings)
 	settings.r2_endpoint_url = "https://r2.cloudflare.com"

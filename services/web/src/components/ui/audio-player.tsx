@@ -17,8 +17,7 @@ interface WSInstance {
 	destroy: () => void
 	play: () => void
 	pause: () => void
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	on: (event: any, cb: (...args: any[]) => void) => void
+	on: (event: string, cb: (...args: unknown[]) => void) => void
 	getDuration: () => number
 	getCurrentTime: () => number
 	setVolume: (v: number) => void

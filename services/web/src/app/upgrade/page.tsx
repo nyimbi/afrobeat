@@ -67,7 +67,7 @@ export default function UpgradePage() {
 		try {
 			const res = await api.payments.createCheckoutSession(tier, "stripe")
 			if (res.checkoutUrl) {
-				window.location.href = res.checkoutUrl
+				window.location.assign(res.checkoutUrl)
 			}
 		} catch (err) {
 			setError(err instanceof GbeduError ? err.message : "Failed to start checkout. Please try again.")

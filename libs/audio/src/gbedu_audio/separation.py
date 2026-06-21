@@ -2,20 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
+from typing import Any, cast
 
+import circuitbreaker
 import structlog
 import torch
-from circuitbreaker import circuit
 from opentelemetry import trace
 
-from gbedu_audio._base import AudioFile, AudioProcessingError, ProcessingResult
+from gbedu_audio._base import AudioFile, AudioProcessingError
 
 log = structlog.get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
 
 # Stem names produced by htdemucs_6s
 _STEM_NAMES = ("drums", "bass", "other", "vocals", "guitar", "piano")
+
+
+def _stem_circuit[F: Callable[..., Any]](func: F) -> F:
+	circuit_factory = cast(Any, circuitbreaker).circuit
+	return cast(F, circuit_factory(failure_threshold=3, recovery_timeout=60)(func))
 
 
 def _probe_audio_file(path: Path) -> AudioFile:  # pragma: no cover
@@ -56,7 +64,7 @@ class StemSeparator:
 		log.info("demucs model loaded", model=self._model_name, device=self._device)
 		return model
 
-	@circuit(failure_threshold=3, recovery_timeout=60)
+	@_stem_circuit
 	async def separate(  # pragma: no cover
 		self,
 		audio_path: Path,
@@ -72,14 +80,20 @@ class StemSeparator:
 
 		t0 = time.perf_counter()
 		with _tracer.start_as_current_span("audio.separate_stems") as span:
+			audio_info = _probe_audio_file(audio_path)
 			span.set_attribute("audio.path", str(audio_path))
+			span.set_attribute("audio.duration_seconds", audio_info.duration_seconds)
+			span.set_attribute("audio.sample_rate", audio_info.sample_rate)
 			span.set_attribute("audio.model", self._model_name)
 			span.set_attribute("audio.device", self._device)
 			try:
 				await self._ensure_model()
 				loop = asyncio.get_running_loop()
 				stem_paths = await loop.run_in_executor(
-					None, self._separate_sync, audio_path, output_dir,
+					None,
+					self._separate_sync,
+					audio_path,
+					output_dir,
 				)
 				elapsed = time.perf_counter() - t0
 				log.info(
@@ -94,23 +108,25 @@ class StemSeparator:
 			except Exception as exc:
 				raise AudioProcessingError(str(exc), stage="separate_stems") from exc
 
-	def _separate_sync(self, audio_path: Path, output_dir: Path) -> dict[str, Path]:  # pragma: no cover
+	def _separate_sync(
+		self, audio_path: Path, output_dir: Path
+	) -> dict[str, Path]:  # pragma: no cover
 		import soundfile as sf
 		import torchaudio
 
-		from demucs.apply import apply_model
-		from demucs.audio import convert_audio
+		demucs_apply = cast(Any, import_module("demucs.apply"))
+		demucs_audio = cast(Any, import_module("demucs.audio"))
 
-		model = self._model  # already loaded
+		model = cast(Any, self._model)  # already loaded
 
 		# Load waveform and resample to model's expected rate
-		waveform, sr = torchaudio.load(str(audio_path))
-		waveform = convert_audio(waveform, sr, model.samplerate, model.audio_channels)  # type: ignore[attr-defined]
+		waveform, sr = cast(Any, torchaudio).load(str(audio_path))
+		waveform = demucs_audio.convert_audio(waveform, sr, model.samplerate, model.audio_channels)
 		# Add batch dimension: (1, channels, samples)
 		waveform = waveform.unsqueeze(0).to(self._device)
 
 		with torch.no_grad():
-			sources = apply_model(model, waveform, device=self._device, progress=False)
+			sources = demucs_apply.apply_model(model, waveform, device=self._device, progress=False)
 		# sources shape: (batch, n_sources, channels, samples) — squeeze batch
 		sources = sources[0]  # (n_sources, channels, samples)
 

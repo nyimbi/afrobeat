@@ -18,7 +18,9 @@ class MLSettings(BaseSettings):
 	API_KEY: str = Field(..., description="Internal service API key — required")
 
 	# ── GPU ────────────────────────────────────────────────────────────────────
-	GPU_DEVICE: str = Field(default="cuda", description="torch device string: cuda, cuda:0, mps, cpu")
+	GPU_DEVICE: str = Field(
+		default="cuda", description="torch device string: cuda, cuda:0, mps, cpu"
+	)
 
 	# ── Model cache dir ────────────────────────────────────────────────────────
 	MODEL_CACHE_DIR: Path = Field(

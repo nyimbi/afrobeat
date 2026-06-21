@@ -13,18 +13,16 @@ Strategy:
   directly — asyncio_mode = "auto" handles async def test_* automatically.
 """
 
-import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
-from gbedu_api.main import app
 from gbedu_api import deps
-
+from gbedu_api.main import app
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _make_redis(ping_ok: bool = True) -> AsyncMock:
 	r = AsyncMock()
@@ -57,6 +55,7 @@ def _client() -> TestClient:
 
 # ── /api/v1/health ─────────────────────────────────────────────────────────────
 
+
 def test_health_returns_200() -> None:
 	client = _client()
 	resp = client.get("/api/v1/health")
@@ -75,6 +74,7 @@ def test_health_response_schema() -> None:
 
 def test_health_timestamp_is_iso_format() -> None:
 	from datetime import datetime
+
 	client = _client()
 	resp = client.get("/api/v1/health")
 	ts = resp.json()["timestamp"]
@@ -84,6 +84,7 @@ def test_health_timestamp_is_iso_format() -> None:
 
 
 # ── /api/v1/ready — all OK ─────────────────────────────────────────────────────
+
 
 def _mock_session_factory_ok():
 	"""Return a callable async-context-manager factory (i.e. the function itself, not a called instance).
@@ -139,6 +140,7 @@ def test_ready_redis_check_ok_value() -> None:
 
 
 # ── /api/v1/ready — individual failures ────────────────────────────────────────
+
 
 def test_ready_db_failure_returns_503() -> None:
 	fake_redis = _make_redis(ping_ok=True)
@@ -236,6 +238,7 @@ def test_ready_db_execute_raises_returns_503() -> None:
 
 # ── /api/v1/metrics ────────────────────────────────────────────────────────────
 
+
 def test_metrics_returns_200() -> None:
 	with patch("gbedu_api.routers.health._update_prometheus_gauges"):
 		resp = _client().get("/api/v1/metrics")
@@ -257,6 +260,7 @@ def test_metrics_body_contains_gauge_names() -> None:
 
 
 # ── /api/v1/health/detailed — healthy baseline ────────────────────────────────
+
 
 def _patch_detailed_healthy(fake_redis, fake_ml):
 	"""Context patches for a fully healthy detailed health response.
@@ -343,6 +347,7 @@ def test_detailed_health_component_status_values() -> None:
 
 # ── /api/v1/health/detailed — degraded paths ──────────────────────────────────
 
+
 def test_detailed_health_ml_degraded() -> None:
 	"""ML returning False → ml_service=degraded → overall=degraded, voice_models degraded."""
 	fake_redis = _make_redis(ping_ok=True)
@@ -401,7 +406,9 @@ def test_detailed_health_storage_degraded_features() -> None:
 		patch("gbedu_core.db._session_factory", _good_factory),
 		patch("gbedu_core.db._engine", mock_engine),
 		patch("gbedu_core.db.get_pool_status", return_value=pool_stats),
-		patch("gbedu_api.deps.get_storage", new=AsyncMock(side_effect=RuntimeError("storage down"))),
+		patch(
+			"gbedu_api.deps.get_storage", new=AsyncMock(side_effect=RuntimeError("storage down"))
+		),
 	):
 		resp = _client().get("/api/v1/health/detailed")
 
@@ -427,7 +434,13 @@ def test_detailed_health_db_pool_degraded_adds_db_throughput() -> None:
 
 	mock_engine = MagicMock()
 	# 10/10 checked out → utilisation = 1.0 → degraded
-	high_util_stats = {"pool_size": 10, "checked_in": 0, "checked_out": 10, "overflow": 0, "invalid": 0}
+	high_util_stats = {
+		"pool_size": 10,
+		"checked_in": 0,
+		"checked_out": 10,
+		"overflow": 0,
+		"invalid": 0,
+	}
 
 	with (
 		patch("gbedu_core.db._session_factory", _good_factory),
@@ -443,6 +456,7 @@ def test_detailed_health_db_pool_degraded_adds_db_throughput() -> None:
 
 
 # ── /api/v1/health/detailed — critical path ───────────────────────────────────
+
 
 def test_detailed_health_redis_down_is_critical() -> None:
 	fake_redis = _make_redis(ping_ok=False)
@@ -506,6 +520,7 @@ def test_detailed_health_both_db_and_redis_down_critical() -> None:
 
 # ── _check_db_pool unit tests (sync helper, called via run_in_executor) ────────
 
+
 def test_check_db_pool_ok() -> None:
 	from gbedu_api.routers.health import _check_db_pool
 
@@ -565,6 +580,7 @@ def test_check_db_pool_down_on_exception() -> None:
 
 # ── _check_database async unit tests ──────────────────────────────────────────
 
+
 async def test_check_database_ok() -> None:
 	from gbedu_api.routers.health import _check_database
 
@@ -612,6 +628,7 @@ async def test_check_database_down_on_execute_error() -> None:
 
 # ── _check_redis async unit tests ─────────────────────────────────────────────
 
+
 async def test_check_redis_ok() -> None:
 	from gbedu_api.routers.health import _check_redis
 
@@ -633,6 +650,7 @@ async def test_check_redis_down_on_ping_failure() -> None:
 
 
 # ── _check_ml_service async unit tests ────────────────────────────────────────
+
 
 async def test_check_ml_service_ok() -> None:
 	from gbedu_api.routers.health import _check_ml_service
@@ -667,6 +685,7 @@ async def test_check_ml_service_degraded_on_exception() -> None:
 
 # ── _check_storage async unit tests ───────────────────────────────────────────
 
+
 async def test_check_storage_ok() -> None:
 	from gbedu_api.routers.health import _check_storage
 
@@ -680,7 +699,10 @@ async def test_check_storage_ok() -> None:
 async def test_check_storage_degraded_on_exception() -> None:
 	from gbedu_api.routers.health import _check_storage
 
-	with patch("gbedu_api.deps.get_storage", new=AsyncMock(side_effect=AssertionError("StorageClient not initialised"))):
+	with patch(
+		"gbedu_api.deps.get_storage",
+		new=AsyncMock(side_effect=AssertionError("StorageClient not initialised")),
+	):
 		result = await _check_storage()
 
 	assert result.status == "degraded"
@@ -688,6 +710,7 @@ async def test_check_storage_degraded_on_exception() -> None:
 
 
 # ── _update_prometheus_gauges unit tests ──────────────────────────────────────
+
 
 def test_update_prometheus_gauges_cpu_only() -> None:
 	"""Runs without raising on CPU-only host (torch.cuda.is_available → False)."""
@@ -711,13 +734,15 @@ def test_update_prometheus_gauges_cpu_only() -> None:
 
 
 def test_update_prometheus_gauges_with_gpu() -> None:
-	from gbedu_api.routers.health import _update_prometheus_gauges, _gauge_gpu_memory_reserved, _gauge_gpu_memory_total
+	from gbedu_api.routers.health import (
+		_update_prometheus_gauges,
+	)
 
 	mock_torch = MagicMock()
 	mock_torch.cuda.is_available.return_value = True
-	mock_torch.cuda.memory_reserved.return_value = 1024 ** 3
+	mock_torch.cuda.memory_reserved.return_value = 1024**3
 	props = MagicMock()
-	props.total_memory = 16 * 1024 ** 3
+	props.total_memory = 16 * 1024**3
 	mock_torch.cuda.get_device_properties.return_value = props
 
 	mock_sync_redis = MagicMock()
@@ -746,7 +771,14 @@ def test_update_prometheus_gauges_torch_import_error_is_silent() -> None:
 
 	with (
 		patch("gbedu_core.db._engine", None),
-		patch("builtins.__import__", side_effect=lambda name, *a, **kw: (_ for _ in ()).throw(ImportError("no torch")) if name == "torch" else __import__(name, *a, **kw)),
+		patch(
+			"builtins.__import__",
+			side_effect=lambda name, *a, **kw: (
+				(_ for _ in ()).throw(ImportError("no torch"))
+				if name == "torch"
+				else __import__(name, *a, **kw)
+			),
+		),
 		patch("redis.from_url", mock_sync_redis.from_url),
 	):
 		_update_prometheus_gauges("redis://localhost:6379/0")

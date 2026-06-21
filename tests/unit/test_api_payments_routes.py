@@ -7,13 +7,14 @@ Covers Stripe and Paystack endpoints including:
 - Subscription status
 - Paystack initialize, verify, webhook
 """
+
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import fakeredis.aioredis
@@ -31,8 +32,7 @@ os.environ.setdefault("STRIPE_PRICE_ID_CREATOR", "price_creator_test")
 os.environ.setdefault("STRIPE_PRICE_ID_PRO", "price_pro_test")
 os.environ.setdefault("STRIPE_PRICE_ID_LABEL", "price_label_test")
 
-from gbedu_core.models.user import SubscriptionTier, SubscriptionStatus
-
+from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier
 
 _PAYSTACK_SECRET = os.environ["PAYSTACK_SECRET_KEY"]
 
@@ -72,8 +72,8 @@ def _build_client(
 	stripe_customer_id: str | None = "cus_test_123",
 	tier: str = "creator",
 ):
+	from gbedu_api.deps import get_current_active_user, get_db, get_redis
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_redis, get_current_active_user
 
 	user = _make_user(stripe_customer_id, tier)
 	mock_db = AsyncMock()
@@ -95,8 +95,9 @@ def _build_client(
 	return client, mock_db, fake_redis, user
 
 
-def teardown_function():
+def teardown_function() -> None:
 	from gbedu_api.main import app
+
 	app.dependency_overrides.clear()
 
 
@@ -110,7 +111,8 @@ def _paystack_sig(payload: bytes) -> str:
 
 # ── POST /payments/stripe/create-checkout ─────────────────────────────────────
 
-def test_create_checkout_success():
+
+def test_create_checkout_success() -> None:
 	client, _, _, _ = _build_client(stripe_customer_id="cus_test_123", tier="creator")
 
 	mock_session = MagicMock()
@@ -132,7 +134,7 @@ def test_create_checkout_success():
 	assert body["session_id"] == "cs_test_abc"
 
 
-def test_create_checkout_no_customer_id_creates_customer():
+def test_create_checkout_no_customer_id_creates_customer() -> None:
 	client, _, _, _ = _build_client(stripe_customer_id=None, tier="creator")
 
 	mock_customer = MagicMock()
@@ -156,7 +158,7 @@ def test_create_checkout_no_customer_id_creates_customer():
 	mock_create.assert_called_once()
 
 
-def test_create_checkout_free_tier_returns_422():
+def test_create_checkout_free_tier_returns_422() -> None:
 	client, _, _, _ = _build_client(tier="free")
 	with patch("gbedu_api.routers.payments.get_settings", return_value=_make_mock_settings()):
 		resp = client.post(
@@ -168,8 +170,10 @@ def test_create_checkout_free_tier_returns_422():
 
 # ── POST /payments/stripe/webhook ─────────────────────────────────────────────
 
-def test_stripe_webhook_invalid_signature_returns_400():
+
+def test_stripe_webhook_invalid_signature_returns_400() -> None:
 	import stripe
+
 	client, _, _, _ = _build_client()
 
 	with (
@@ -189,16 +193,15 @@ def test_stripe_webhook_invalid_signature_returns_400():
 	assert resp.json()["detail"]["error_code"] == "PAYMENT_WEBHOOK_ERROR"
 
 
-def test_stripe_webhook_duplicate_redis_returns_already_processed():
+def test_stripe_webhook_duplicate_redis_returns_already_processed() -> None:
 	import asyncio
+
 	client, mock_db, fake_redis, _ = _build_client()
 
 	event_id = "evt_dupe_001"
 	idempotency_key = f"stripe_event:{event_id}"
 	# Pre-set the key in fake_redis to simulate duplicate
-	asyncio.get_event_loop().run_until_complete(
-		fake_redis.set(idempotency_key, "1")
-	)
+	asyncio.get_event_loop().run_until_complete(fake_redis.set(idempotency_key, "1"))
 
 	mock_event = {
 		"id": event_id,
@@ -220,7 +223,7 @@ def test_stripe_webhook_duplicate_redis_returns_already_processed():
 	assert resp.json()["status"] == "already_processed"
 
 
-def test_stripe_webhook_new_event_returns_ok():
+def test_stripe_webhook_new_event_returns_ok() -> None:
 	client, mock_db, _, _ = _build_client()
 
 	event_id = "evt_new_001"
@@ -255,7 +258,8 @@ def test_stripe_webhook_new_event_returns_ok():
 
 # ── GET /payments/portal ──────────────────────────────────────────────────────
 
-def test_portal_no_customer_returns_422():
+
+def test_portal_no_customer_returns_422() -> None:
 	client, _, _, _ = _build_client(stripe_customer_id=None)
 	with patch("gbedu_api.routers.payments.get_settings", return_value=_make_mock_settings()):
 		resp = client.get("/api/v1/payments/portal")
@@ -263,7 +267,7 @@ def test_portal_no_customer_returns_422():
 	assert resp.json()["detail"]["error_code"] == "PAYMENT_ERROR"
 
 
-def test_portal_success():
+def test_portal_success() -> None:
 	client, _, _, _ = _build_client(stripe_customer_id="cus_test_123")
 
 	mock_session = MagicMock()
@@ -281,7 +285,8 @@ def test_portal_success():
 
 # ── GET /payments/subscription ────────────────────────────────────────────────
 
-def test_get_subscription_no_sub():
+
+def test_get_subscription_no_sub() -> None:
 	client, mock_db, _, _ = _build_client(tier="creator")
 
 	none_result = MagicMock()
@@ -297,11 +302,11 @@ def test_get_subscription_no_sub():
 	assert body["cancel_at_period_end"] is False
 
 
-def test_get_subscription_with_sub():
+def test_get_subscription_with_sub() -> None:
 	client, mock_db, _, _ = _build_client(tier="pro")
 
 	mock_sub = MagicMock()
-	mock_sub.current_period_end = datetime(2026, 12, 31, tzinfo=timezone.utc)
+	mock_sub.current_period_end = datetime(2026, 12, 31, tzinfo=UTC)
 	mock_sub.cancel_at_period_end = False
 
 	sub_result = MagicMock()
@@ -319,7 +324,8 @@ def test_get_subscription_with_sub():
 
 # ── POST /payments/paystack/initialize ────────────────────────────────────────
 
-def test_paystack_initialize_success():
+
+def test_paystack_initialize_success() -> None:
 	client, _, _, _ = _build_client(tier="creator")
 
 	mock_resp = MagicMock()
@@ -353,7 +359,7 @@ def test_paystack_initialize_success():
 	assert body["reference"] == "ref_001"
 
 
-def test_paystack_initialize_free_tier_returns_422():
+def test_paystack_initialize_free_tier_returns_422() -> None:
 	client, _, _, _ = _build_client(tier="free")
 	with patch("gbedu_api.routers.payments.get_settings", return_value=_make_mock_settings()):
 		resp = client.post(
@@ -363,7 +369,7 @@ def test_paystack_initialize_free_tier_returns_422():
 	assert resp.status_code == 422
 
 
-def test_paystack_initialize_api_failure_returns_502():
+def test_paystack_initialize_api_failure_returns_502() -> None:
 	client, _, _, _ = _build_client(tier="creator")
 
 	mock_resp = MagicMock()
@@ -390,7 +396,8 @@ def test_paystack_initialize_api_failure_returns_502():
 
 # ── GET /payments/paystack/verify/{reference} ─────────────────────────────────
 
-def test_paystack_verify_success_new_payment():
+
+def test_paystack_verify_success_new_payment() -> None:
 	client, mock_db, _, _ = _build_client(tier="creator")
 
 	mock_resp = MagicMock()
@@ -429,7 +436,7 @@ def test_paystack_verify_success_new_payment():
 	assert body["reference"] == "ref_verify_001"
 
 
-def test_paystack_verify_api_failure_returns_502():
+def test_paystack_verify_api_failure_returns_502() -> None:
 	client, _, _, _ = _build_client()
 
 	mock_resp = MagicMock()
@@ -453,21 +460,26 @@ def test_paystack_verify_api_failure_returns_502():
 
 # ── POST /payments/paystack/webhook ──────────────────────────────────────────
 
-def _paystack_webhook_payload(event_type: str = "charge.success", reference: str = "ref_wh_001") -> bytes:
-	return json.dumps({
-		"event": event_type,
-		"data": {
-			"reference": reference,
-			"amount": 500000,
-			"currency": "NGN",
-			"status": "success",
-			"metadata": {"user_id": "user-pay-test-001", "tier": "creator"},
-			"customer": {"customer_code": "CUS_001"},
-		},
-	}).encode()
+
+def _paystack_webhook_payload(
+	event_type: str = "charge.success", reference: str = "ref_wh_001"
+) -> bytes:
+	return json.dumps(
+		{
+			"event": event_type,
+			"data": {
+				"reference": reference,
+				"amount": 500000,
+				"currency": "NGN",
+				"status": "success",
+				"metadata": {"user_id": "user-pay-test-001", "tier": "creator"},
+				"customer": {"customer_code": "CUS_001"},
+			},
+		}
+	).encode()
 
 
-def test_paystack_webhook_invalid_signature_returns_400():
+def test_paystack_webhook_invalid_signature_returns_400() -> None:
 	client, _, _, _ = _build_client()
 	payload = _paystack_webhook_payload()
 	with patch("gbedu_api.routers.payments.get_settings", return_value=_make_mock_settings()):
@@ -480,15 +492,14 @@ def test_paystack_webhook_invalid_signature_returns_400():
 	assert resp.json()["detail"]["error_code"] == "PAYMENT_WEBHOOK_ERROR"
 
 
-def test_paystack_webhook_duplicate_returns_already_processed():
+def test_paystack_webhook_duplicate_returns_already_processed() -> None:
 	import asyncio
+
 	client, mock_db, fake_redis, _ = _build_client()
 
 	reference = "ref_wh_dupe"
 	idempotency_key = f"paystack_event:{reference}"
-	asyncio.get_event_loop().run_until_complete(
-		fake_redis.set(idempotency_key, "1")
-	)
+	asyncio.get_event_loop().run_until_complete(fake_redis.set(idempotency_key, "1"))
 
 	payload = _paystack_webhook_payload(reference=reference)
 	sig = _paystack_sig(payload)
@@ -504,7 +515,7 @@ def test_paystack_webhook_duplicate_returns_already_processed():
 	assert resp.json()["status"] == "already_processed"
 
 
-def test_paystack_webhook_charge_success_returns_ok():
+def test_paystack_webhook_charge_success_returns_ok() -> None:
 	client, mock_db, _, _ = _build_client()
 
 	payload = _paystack_webhook_payload("charge.success", "ref_wh_new_001")
@@ -528,7 +539,7 @@ def test_paystack_webhook_charge_success_returns_ok():
 	assert resp.json()["status"] == "ok"
 
 
-def test_paystack_webhook_unknown_event_returns_ok():
+def test_paystack_webhook_unknown_event_returns_ok() -> None:
 	client, mock_db, _, _ = _build_client()
 
 	payload = _paystack_webhook_payload("transfer.success", "ref_wh_transfer_001")
@@ -551,7 +562,8 @@ def test_paystack_webhook_unknown_event_returns_ok():
 
 # ── _handle_stripe_event helpers ──────────────────────────────────────────────
 
-async def test_handle_stripe_event_subscription_created():
+
+async def test_handle_stripe_event_subscription_created() -> None:
 	from gbedu_api.routers.payments import _handle_stripe_event
 
 	mock_db = AsyncMock()
@@ -581,7 +593,7 @@ async def test_handle_stripe_event_subscription_created():
 	await _handle_stripe_event(event, mock_db)
 
 
-async def test_handle_stripe_event_unhandled_type_does_not_raise():
+async def test_handle_stripe_event_unhandled_type_does_not_raise() -> None:
 	from gbedu_api.routers.payments import _handle_stripe_event
 
 	mock_db = AsyncMock()
@@ -592,7 +604,7 @@ async def test_handle_stripe_event_unhandled_type_does_not_raise():
 	await _handle_stripe_event(event, mock_db)
 
 
-async def test_handle_stripe_event_invoice_paid():
+async def test_handle_stripe_event_invoice_paid() -> None:
 	from gbedu_api.routers.payments import _handle_stripe_event
 
 	mock_db = AsyncMock()
@@ -617,7 +629,7 @@ async def test_handle_stripe_event_invoice_paid():
 	mock_db.add.assert_called()
 
 
-async def test_handle_stripe_event_subscription_deleted():
+async def test_handle_stripe_event_subscription_deleted() -> None:
 	from gbedu_api.routers.payments import _handle_stripe_event
 
 	mock_db = AsyncMock()
@@ -641,7 +653,7 @@ async def test_handle_stripe_event_subscription_deleted():
 	await _handle_stripe_event(event, mock_db)
 
 
-async def test_handle_stripe_event_checkout_beat_purchase_no_beat_meta():
+async def test_handle_stripe_event_checkout_beat_purchase_no_beat_meta() -> None:
 	from gbedu_api.routers.payments import _handle_stripe_event
 
 	mock_db = AsyncMock()

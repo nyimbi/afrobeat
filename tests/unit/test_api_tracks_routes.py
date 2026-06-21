@@ -6,11 +6,12 @@ Strategy:
   that arise from Model.__new__() in isolated unit tests without a DB session.
 - No @pytest.mark.asyncio — asyncio_mode = "auto" is set project-wide.
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 from starlette.testclient import TestClient
 
@@ -20,11 +21,13 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("GBEDU_ML_API_KEY", "test-ml-internal-api-key")
 
-from gbedu_core.models.user import SubscriptionTier, SubscriptionStatus
-from gbedu_core.models.track import SubGenre, Language, TrackStatus
+from typing import Never
 
+from gbedu_core.models.track import Language, SubGenre, TrackStatus
+from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _make_user(tier: str = "free") -> MagicMock:
 	user = MagicMock()
@@ -60,14 +63,14 @@ def _make_track(user_id: str = "user-test-001", is_public: bool = False) -> Magi
 	track.play_count = 0
 	track.share_count = 0
 	track.stem_urls = {}
-	track.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+	track.created_at = datetime(2025, 1, 1, tzinfo=UTC)
 	track.deleted_at = None
 	return track
 
 
 def _build_client(tier: str = "free"):
+	from gbedu_api.deps import get_current_active_user, get_db
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user
 
 	user = _make_user(tier)
 	mock_db = AsyncMock()
@@ -82,14 +85,16 @@ def _build_client(tier: str = "free"):
 	return client, mock_db, user
 
 
-def teardown_function():
+def teardown_function() -> None:
 	from gbedu_api.main import app
+
 	app.dependency_overrides.clear()
 
 
 # ── GET /tracks/public ─────────────────────────────────────────────────────────
 
-def test_list_public_tracks_returns_paginated_response():
+
+def test_list_public_tracks_returns_paginated_response() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track(is_public=True)
 
@@ -109,7 +114,7 @@ def test_list_public_tracks_returns_paginated_response():
 	assert body["items"][0]["id"] == "track-test-001"
 
 
-def test_list_public_tracks_empty_returns_zero_total():
+def test_list_public_tracks_empty_returns_zero_total() -> None:
 	client, mock_db, _ = _build_client()
 
 	count_result = MagicMock()
@@ -127,7 +132,8 @@ def test_list_public_tracks_empty_returns_zero_total():
 
 # ── GET /tracks ────────────────────────────────────────────────────────────────
 
-def test_list_my_tracks_returns_user_tracks():
+
+def test_list_my_tracks_returns_user_tracks() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track()
 
@@ -145,7 +151,7 @@ def test_list_my_tracks_returns_user_tracks():
 	assert body["items"][0]["title"] == "Test Track"
 
 
-def test_list_my_tracks_pagination_clamps_page_size():
+def test_list_my_tracks_pagination_clamps_page_size() -> None:
 	client, mock_db, _ = _build_client()
 
 	count_result = MagicMock()
@@ -163,7 +169,8 @@ def test_list_my_tracks_pagination_clamps_page_size():
 
 # ── GET /tracks/{track_id} ─────────────────────────────────────────────────────
 
-def test_get_track_owned_returns_200():
+
+def test_get_track_owned_returns_200() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track()
 
@@ -177,7 +184,7 @@ def test_get_track_owned_returns_200():
 	assert resp.json()["id"] == "track-test-001"
 
 
-def test_get_track_not_found_returns_404():
+def test_get_track_not_found_returns_404() -> None:
 	client, mock_db, _ = _build_client()
 
 	result = MagicMock()
@@ -189,7 +196,7 @@ def test_get_track_not_found_returns_404():
 	assert resp.status_code == 404
 
 
-def test_get_track_not_owned_returns_403():
+def test_get_track_not_owned_returns_403() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track(user_id="other-user-999")
 
@@ -204,7 +211,8 @@ def test_get_track_not_owned_returns_403():
 
 # ── PATCH /tracks/{track_id} ───────────────────────────────────────────────────
 
-def test_update_track_title_returns_updated_track():
+
+def test_update_track_title_returns_updated_track() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track()
 
@@ -220,7 +228,7 @@ def test_update_track_title_returns_updated_track():
 	assert track.title == "Updated Title"
 
 
-def test_update_track_empty_title_returns_422():
+def test_update_track_empty_title_returns_422() -> None:
 	client, _, _ = _build_client()
 
 	resp = client.patch("/api/v1/tracks/track-test-001", json={"title": ""})
@@ -228,7 +236,7 @@ def test_update_track_empty_title_returns_422():
 	assert resp.status_code == 422
 
 
-def test_update_track_not_found_returns_404():
+def test_update_track_not_found_returns_404() -> None:
 	client, mock_db, _ = _build_client()
 
 	result = MagicMock()
@@ -242,7 +250,8 @@ def test_update_track_not_found_returns_404():
 
 # ── DELETE /tracks/{track_id} ──────────────────────────────────────────────────
 
-def test_delete_track_owned_returns_200():
+
+def test_delete_track_owned_returns_200() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track()
 	track.delete = AsyncMock()
@@ -257,7 +266,7 @@ def test_delete_track_owned_returns_200():
 	assert resp.json()["message"] == "Track deleted"
 
 
-def test_delete_track_not_found_returns_404():
+def test_delete_track_not_found_returns_404() -> None:
 	client, mock_db, _ = _build_client()
 
 	result = MagicMock()
@@ -271,7 +280,8 @@ def test_delete_track_not_found_returns_404():
 
 # ── POST /tracks/{track_id}/share ──────────────────────────────────────────────
 
-def test_share_track_increments_share_count():
+
+def test_share_track_increments_share_count() -> None:
 	client, mock_db, _ = _build_client()
 	track = _make_track()
 	track.share_count = 5
@@ -293,10 +303,11 @@ def test_share_track_increments_share_count():
 
 # ── GET /tracks/{track_id}/stems ───────────────────────────────────────────────
 
-def test_get_stems_requires_creator_tier():
-	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, require_tier
+
+def test_get_stems_requires_creator_tier() -> None:
 	from fastapi import HTTPException, status
+	from gbedu_api.deps import get_current_active_user, get_db, require_tier
+	from gbedu_api.main import app
 
 	user = _make_user(tier="free")
 	mock_db = AsyncMock()
@@ -306,7 +317,7 @@ def test_get_stems_requires_creator_tier():
 
 	_tier_dep = require_tier(SubscriptionTier.creator)
 
-	def _deny():
+	def _deny() -> Never:
 		raise HTTPException(
 			status_code=status.HTTP_403_FORBIDDEN,
 			detail={
@@ -325,14 +336,16 @@ def test_get_stems_requires_creator_tier():
 	assert resp.status_code == 403
 
 
-def test_get_stems_creator_tier_returns_presigned_urls():
+def test_get_stems_creator_tier_returns_presigned_urls() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, get_storage, require_tier
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, get_storage, require_tier
 
 	user = _make_user(tier="creator")
 	mock_db = AsyncMock()
 	mock_storage = AsyncMock()
-	mock_storage.get_presigned_url = AsyncMock(return_value="https://presigned.example.com/drum.wav")
+	mock_storage.get_presigned_url = AsyncMock(
+		return_value="https://presigned.example.com/drum.wav"
+	)
 
 	track = _make_track()
 	track.stem_urls = {"drums": "voice-samples/drums.wav"}

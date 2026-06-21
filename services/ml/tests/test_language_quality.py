@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 """Unit tests for language quality gate and Pidgin pattern library.
 
 No mocks — all tests operate on real string inputs and real objects.
@@ -7,25 +9,24 @@ Run with: uv run pytest services/ml/tests/test_language_quality.py -vxs
 from __future__ import annotations
 
 import pytest
-
-from gbedu_ml.language.quality_gate import (
-	PidginYorubaQualityGate,
-	QualityGateResult,
-	_PIDGIN_MARKER_MIN_RATE,
-	_YORUBA_CHAR_MIN_DENSITY,
-	_SWAHILI_MARKER_MIN_RATE,
-	_LINGALA_MARKER_MIN_RATE,
-	_ZULU_MARKER_MIN_RATE,
-	_TWI_CHAR_MIN_DENSITY,
-)
 from gbedu_ml.language.pidgin_patterns import (
+	_PHRASE_BANK,
 	PidginPatternLibrary,
 	PidginPhrase,
-	_PHRASE_BANK,
+)
+from gbedu_ml.language.quality_gate import (
+	_LINGALA_MARKER_MIN_RATE,
+	_PIDGIN_MARKER_MIN_RATE,
+	_SWAHILI_MARKER_MIN_RATE,
+	_TWI_CHAR_MIN_DENSITY,
+	_YORUBA_CHAR_MIN_DENSITY,
+	_ZULU_MARKER_MIN_RATE,
+	PidginYorubaQualityGate,
+	QualityGateResult,
 )
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def gate() -> PidginYorubaQualityGate:
@@ -100,6 +101,7 @@ _FAKE_YORUBA = (
 # PidginYorubaQualityGate — Pidgin tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestPidginGatePasses:
 	def test_authentic_verse_passes(self, gate: PidginYorubaQualityGate) -> None:
 		result = gate.check_pidgin(_GOOD_PIDGIN_LYRICS)
@@ -173,6 +175,7 @@ class TestPidginGateEdgeCases:
 # PidginYorubaQualityGate — Yoruba tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestYorubaGatePasses:
 	def test_authentic_yoruba_passes(self, gate: PidginYorubaQualityGate) -> None:
 		result = gate.check_yoruba(_GOOD_YORUBA_LYRICS)
@@ -237,6 +240,7 @@ class TestYorubaGateEdgeCases:
 # PidginPatternLibrary tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestPhraseBank:
 	def test_phrase_bank_has_minimum_size(self) -> None:
 		assert len(_PHRASE_BANK) >= 20
@@ -255,6 +259,7 @@ class TestPhraseBank:
 
 	def test_each_theme_has_at_least_four_phrases(self) -> None:
 		from collections import Counter
+
 		counts = Counter(p.theme for p in _PHRASE_BANK)
 		for theme, count in counts.items():
 			assert count >= 4, f"theme '{theme}' only has {count} phrases"
@@ -321,13 +326,16 @@ class TestFewShotBlock:
 	def test_block_format_has_gloss(self, lib: PidginPatternLibrary) -> None:
 		block = lib.format_few_shot_block(n=2)
 		# Each line should have parenthesised gloss and bracketed theme
-		assert "(" in block and ")" in block
-		assert "[" in block and "]" in block
+		assert "(" in block
+		assert ")" in block
+		assert "[" in block
+		assert "]" in block
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # inject_pidgin_flavor tests
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestInjectPidginFlavor:
 	def test_you_know_becomes_you_sabi(self, lib: PidginPatternLibrary) -> None:
@@ -368,12 +376,14 @@ class TestInjectPidginFlavor:
 		text = "you know what is happening? let's go now, no problem at all"
 		result = lib.inject_pidgin_flavor(text)
 		# At minimum two substitutions should fire
-		pidgin_markers = sum([
-			"you sabi" in result,
-			"wetin dey happen" in result,
-			"make we go" in result,
-			"no wahala" in result,
-		])
+		pidgin_markers = sum(
+			[
+				"you sabi" in result,
+				"wetin dey happen" in result,
+				"make we go" in result,
+				"no wahala" in result,
+			]
+		)
 		assert pidgin_markers >= 2
 
 	def test_result_is_longer_or_equal(self, lib: PidginPatternLibrary) -> None:
@@ -560,6 +570,7 @@ class TestTwiGateFails:
 # QualityGateResult model tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestQualityGateResultModel:
 	def test_construct_minimal(self) -> None:
 		r = QualityGateResult(passed=True, confidence=0.8, reason="ok")
@@ -580,5 +591,6 @@ class TestQualityGateResultModel:
 
 	def test_extra_fields_forbidden(self) -> None:
 		from pydantic import ValidationError
+
 		with pytest.raises(ValidationError):
 			QualityGateResult(passed=True, confidence=1.0, reason="ok", unknown_field="x")  # type: ignore[call-arg]

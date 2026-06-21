@@ -4,18 +4,19 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
-
-from gbedu_core._uuid7 import uuid7str
 from gbedu_core.errors import GenerationError
 from gbedu_core.schemas import GenerationRequest
+from pydantic import BaseModel, ConfigDict, Field
+
 from gbedu_ml.config import settings
-from gbedu_ml.inference.lyric_generator import LyricGenerator, LyricResult
-from gbedu_ml.inference.music_generator import MusicGenerator, MusicGenerationResult
-from gbedu_ml.inference.vocal_synthesizer import VocalSynthesizer
+
+if TYPE_CHECKING:
+	from gbedu_ml.inference.lyric_generator import LyricGenerator, LyricResult
+	from gbedu_ml.inference.music_generator import MusicGenerationResult, MusicGenerator
+	from gbedu_ml.inference.vocal_synthesizer import VocalSynthesizer
 
 log = structlog.get_logger(__name__)
 
@@ -62,7 +63,8 @@ class GenerationPipeline:
 	async def _get_redis(self) -> Any:
 		if self._redis is None:
 			import redis.asyncio as aioredis  # type: ignore[import]
-			self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+
+			self._redis = cast(Any, aioredis).from_url(settings.REDIS_URL, decode_responses=True)
 		return self._redis
 
 	async def _publish_progress(self, job_id: str, percent: int, stage: str) -> None:
@@ -86,7 +88,7 @@ class GenerationPipeline:
 				self._run_inner(request, job_id, t0),
 				timeout=_PIPELINE_TIMEOUT_SECONDS,
 			)
-		except asyncio.TimeoutError:
+		except TimeoutError:
 			elapsed = time.perf_counter() - t0
 			log.error(
 				"pipeline.timeout",
@@ -190,7 +192,9 @@ class GenerationPipeline:
 			},
 		)
 
-	async def _generate_lyrics_safe(self, request: GenerationRequest) -> LyricResult | None:  # pragma: no cover
+	async def _generate_lyrics_safe(
+		self, request: GenerationRequest
+	) -> LyricResult | None:  # pragma: no cover
 		if not self._lyric_gen.is_loaded:
 			log.warning("pipeline.lyric_gen.not_loaded")
 			return None
@@ -200,7 +204,9 @@ class GenerationPipeline:
 			log.warning("pipeline.lyric_gen.failed", error=str(exc))
 			return None
 
-	async def _write_lyrics_file(self, job_id: str, lyric_result: LyricResult) -> Path:  # pragma: no cover
+	async def _write_lyrics_file(
+		self, job_id: str, lyric_result: LyricResult
+	) -> Path:  # pragma: no cover
 		path = settings.OUTPUT_DIR / f"lyrics_{job_id}.txt"
 		loop = asyncio.get_event_loop()
 
@@ -221,11 +227,14 @@ class GenerationPipeline:
 		await loop.run_in_executor(None, self._mix_sync, instrumental_path, vocal_path, out_path)
 		return out_path
 
-	def _mix_sync(self, instrumental_path: Path, vocal_path: Path, out_path: Path) -> None:  # pragma: no cover
+	def _mix_sync(
+		self, instrumental_path: Path, vocal_path: Path, out_path: Path
+	) -> None:  # pragma: no cover
 		from pydub import AudioSegment  # type: ignore[import]
 
-		instrumental = AudioSegment.from_wav(str(instrumental_path))
-		vocals = AudioSegment.from_wav(str(vocal_path))
+		audio_segment = cast(Any, AudioSegment)
+		instrumental = audio_segment.from_wav(str(instrumental_path))
+		vocals = audio_segment.from_wav(str(vocal_path))
 
 		# Normalise lengths — truncate the longer to the shorter
 		min_len_ms = min(len(instrumental), len(vocals))

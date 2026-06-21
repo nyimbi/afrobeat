@@ -10,14 +10,11 @@ Idempotency key TTL: 72 h (well past any realistic retry window from either
 payment provider).
 """
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, cast
 
 import structlog
 from celery import Task
-from opentelemetry import trace
-from sqlalchemy import select
-
 from gbedu_core.config import RedisSettings
 from gbedu_core.models.payment import (
 	Payment,
@@ -28,7 +25,10 @@ from gbedu_core.models.payment import (
 )
 from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier, User
 from gbedu_core.telemetry import get_tracer, increment_error_count
-from gbedu_worker.celery_app import app
+from opentelemetry import trace
+from sqlalchemy import select
+
+from gbedu_worker.celery_app import celery_task, retry_task
 from gbedu_worker.db import get_async_session, run_async
 
 log = structlog.get_logger(__name__)
@@ -42,7 +42,8 @@ _IDEMPOTENCY_TTL = 72 * 3600
 
 # ── Stripe ─────────────────────────────────────────────────────────────────────
 
-@app.task(
+
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.payments.process_stripe_webhook",
 	max_retries=5,
@@ -70,7 +71,7 @@ def process_stripe_webhook(
 		span.set_attribute("stripe.event_type", event_type)
 
 		try:
-			result = run_async(_handle_stripe_event(event_id, event_type, event_data))
+			result = run_async(_handle_stripe_event, event_id, event_type, event_data)
 			return result
 		except Exception as exc:  # pragma: no cover
 			task_log.error(
@@ -81,10 +82,7 @@ def process_stripe_webhook(
 			increment_error_count(error_code=type(exc).__name__, service="worker.payments.stripe")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(
-				exc=exc,
-				countdown=_stripe_retry_countdown(self.request.retries),
-			)
+			retry_task(self, exc=exc, countdown=_stripe_retry_countdown(self.request.retries))
 
 
 async def _handle_stripe_event(  # pragma: no cover
@@ -175,7 +173,8 @@ async def _stripe_subscription_upsert(  # pragma: no cover
 			user_id=user.id,
 			provider=PaymentProvider.stripe,
 			provider_subscription_id=provider_sub_id,
-			provider_plan_id=obj.get("plan", {}).get("id", "") or obj.get("items", {}).get("data", [{}])[0].get("price", {}).get("id", ""),
+			provider_plan_id=obj.get("plan", {}).get("id", "")
+			or obj.get("items", {}).get("data", [{}])[0].get("price", {}).get("id", ""),
 			tier=tier.value,
 			interval=_stripe_interval(obj),
 			status=new_status,
@@ -201,7 +200,9 @@ async def _stripe_subscription_upsert(  # pragma: no cover
 			session,
 			stripe_customer_id=obj.get("customer"),
 			tier=tier,
-			status=SubscriptionStatus.active if new_status == "active" else SubscriptionStatus.trialing,
+			status=SubscriptionStatus.active
+			if new_status == "active"
+			else SubscriptionStatus.trialing,
 		)
 
 	await session.flush()
@@ -230,7 +231,7 @@ async def _stripe_record_payment(  # pragma: no cover
 	if existing is not None:
 		existing.status = status
 		if status == PaymentStatus.succeeded:
-			existing.paid_at = datetime.now(timezone.utc)
+			existing.paid_at = datetime.now(UTC)
 		session.add(existing)
 		await session.flush()
 		return
@@ -258,11 +259,13 @@ async def _stripe_record_payment(  # pragma: no cover
 		amount_minor=invoice_obj.get("amount_paid", 0) or invoice_obj.get("total", 0),
 		currency=(invoice_obj.get("currency") or "usd").upper(),
 		description=f"Stripe invoice {invoice_obj.get('id', '')}",
-		paid_at=datetime.now(timezone.utc) if status == PaymentStatus.succeeded else None,
+		paid_at=datetime.now(UTC) if status == PaymentStatus.succeeded else None,
 	)
 	session.add(payment)
 	await session.flush()
-	log.info("stripe payment recorded", provider_payment_id=provider_payment_id, status=status.value)
+	log.info(
+		"stripe payment recorded", provider_payment_id=provider_payment_id, status=status.value
+	)
 
 
 async def _stripe_checkout_completed(session: Any, obj: dict[str, Any]) -> None:  # pragma: no cover
@@ -292,7 +295,9 @@ async def _update_user_subscription(  # pragma: no cover
 	)
 	user: User | None = result.scalar_one_or_none()
 	if user is None:
-		log.warning("update_user_subscription: user not found", stripe_customer_id=stripe_customer_id)
+		log.warning(
+			"update_user_subscription: user not found", stripe_customer_id=stripe_customer_id
+		)
 		return
 
 	if tier is not None:
@@ -310,7 +315,8 @@ async def _update_user_subscription(  # pragma: no cover
 
 # ── Paystack ───────────────────────────────────────────────────────────────────
 
-@app.task(
+
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.payments.process_paystack_webhook",
 	max_retries=5,
@@ -337,7 +343,7 @@ def process_paystack_webhook(
 		span.set_attribute("paystack.reference", reference)
 
 		try:
-			result = run_async(_handle_paystack_event(event, data, reference))
+			result = run_async(_handle_paystack_event, event, data, reference)
 			return result
 		except Exception as exc:  # pragma: no cover
 			task_log.error(
@@ -348,10 +354,7 @@ def process_paystack_webhook(
 			increment_error_count(error_code=type(exc).__name__, service="worker.payments.paystack")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(
-				exc=exc,
-				countdown=_paystack_retry_countdown(self.request.retries),
-			)
+			retry_task(self, exc=exc, countdown=_paystack_retry_countdown(self.request.retries))
 
 
 async def _handle_paystack_event(  # pragma: no cover
@@ -361,7 +364,9 @@ async def _handle_paystack_event(  # pragma: no cover
 ) -> dict[str, Any]:
 	idempotency_key = f"paystack:{event}:{reference}"
 	if await _already_processed(idempotency_key):
-		log.info("paystack event already processed — skipping", paystack_event=event, reference=reference)
+		log.info(
+			"paystack event already processed — skipping", paystack_event=event, reference=reference
+		)
 		return {"status": "skipped", "reason": "duplicate", "reference": reference}
 
 	async with get_async_session() as session:
@@ -388,9 +393,7 @@ async def _paystack_charge_success(session: Any, data: dict[str, Any]) -> None: 
 	assert reference, "charge.success missing reference"
 
 	# Check idempotency at DB level too
-	result = await session.execute(
-		select(Payment).where(Payment.provider_payment_id == reference)
-	)
+	result = await session.execute(select(Payment).where(Payment.provider_payment_id == reference))
 	if result.scalar_one_or_none() is not None:
 		log.info("paystack charge already recorded", reference=reference)
 		return
@@ -407,7 +410,11 @@ async def _paystack_charge_success(session: Any, data: dict[str, Any]) -> None: 
 			user = user_result.scalar_one_or_none()
 
 	if user is None:
-		log.warning("paystack charge.success: user not found", reference=reference, customer_code=customer_code)
+		log.warning(
+			"paystack charge.success: user not found",
+			reference=reference,
+			customer_code=customer_code,
+		)
 		return
 
 	from gbedu_core._uuid7 import uuid7str
@@ -424,14 +431,16 @@ async def _paystack_charge_success(session: Any, data: dict[str, Any]) -> None: 
 		amount_minor=amount_kobo,
 		currency=currency,
 		description=f"Paystack charge {reference}",
-		paid_at=datetime.now(timezone.utc),
+		paid_at=datetime.now(UTC),
 	)
 	session.add(payment)
 	await session.flush()
 	log.info("paystack charge recorded", reference=reference, amount_kobo=amount_kobo)
 
 
-async def _paystack_subscription_create(session: Any, data: dict[str, Any]) -> None:  # pragma: no cover
+async def _paystack_subscription_create(
+	session: Any, data: dict[str, Any]
+) -> None:  # pragma: no cover
 	sub_code: str = data.get("subscription_code", "")
 	plan_code: str = data.get("plan", {}).get("plan_code", "")
 	customer_code: str = data.get("customer", {}).get("customer_code", "")
@@ -468,7 +477,7 @@ async def _paystack_subscription_create(session: Any, data: dict[str, Any]) -> N
 		status="active",
 		amount_minor=amount_kobo,
 		currency="NGN",
-		current_period_start=datetime.now(timezone.utc),
+		current_period_start=datetime.now(UTC),
 		current_period_end=_paystack_next_billing(data),
 	)
 	session.add(sub)
@@ -486,7 +495,9 @@ async def _paystack_subscription_create(session: Any, data: dict[str, Any]) -> N
 	)
 
 
-async def _paystack_subscription_disable(session: Any, data: dict[str, Any]) -> None:  # pragma: no cover
+async def _paystack_subscription_disable(
+	session: Any, data: dict[str, Any]
+) -> None:  # pragma: no cover
 	sub_code: str = data.get("subscription_code", "")
 	customer_code: str = data.get("customer", {}).get("customer_code", "")
 
@@ -500,7 +511,7 @@ async def _paystack_subscription_disable(session: Any, data: dict[str, Any]) -> 
 		return
 
 	sub.status = "cancelled"
-	sub.cancelled_at = datetime.now(timezone.utc)
+	sub.cancelled_at = datetime.now(UTC)
 	session.add(sub)
 
 	user_result = await session.execute(
@@ -518,18 +529,27 @@ async def _paystack_subscription_disable(session: Any, data: dict[str, Any]) -> 
 
 # ── Redis idempotency helpers ──────────────────────────────────────────────────
 
+
 async def _already_processed(key: str) -> bool:  # pragma: no cover
-	import redis.asyncio as aioredis
-	r = await aioredis.from_url(_redis_settings.url, encoding="utf-8", decode_responses=True)
+	r = await _redis_client()
 	async with r:
 		return bool(await r.exists(f"webhook_processed:{key}"))
 
 
 async def _mark_processed(key: str) -> None:  # pragma: no cover
-	import redis.asyncio as aioredis
-	r = await aioredis.from_url(_redis_settings.url, encoding="utf-8", decode_responses=True)
+	r = await _redis_client()
 	async with r:
 		await r.setex(f"webhook_processed:{key}", _IDEMPOTENCY_TTL, "1")
+
+
+async def _redis_client() -> Any:  # pragma: no cover
+	import redis.asyncio as aioredis
+
+	return await cast(Any, aioredis).from_url(
+		_redis_settings.url,
+		encoding="utf-8",
+		decode_responses=True,
+	)
 
 
 # ── Stripe helpers ─────────────────────────────────────────────────────────────
@@ -539,14 +559,16 @@ _STRIPE_PLAN_TIER_MAP: dict[str, SubscriptionTier] = {}
 
 def _stripe_plan_to_tier(obj: dict[str, Any]) -> SubscriptionTier:
 	from gbedu_core.config import StripeSettings
+
 	stripe_cfg = StripeSettings()
 
 	# Try to resolve from price ID on the plan or first item
-	plan = obj.get("plan") or {}
-	price_id: str = (
-		plan.get("id", "")
-		or (obj.get("items", {}).get("data", [{}])[0].get("price", {}).get("id", ""))
-	)
+	plan = cast(dict[str, Any], obj.get("plan") or {})
+	items = cast(dict[str, Any], obj.get("items") or {})
+	item_data = cast(list[dict[str, Any]], items.get("data") or [{}])
+	first_item = item_data[0] if item_data else {}
+	price = cast(dict[str, Any], first_item.get("price") or {})
+	price_id = str(plan.get("id") or price.get("id") or "")
 
 	if price_id == stripe_cfg.price_id_creator:
 		return SubscriptionTier.creator
@@ -556,7 +578,8 @@ def _stripe_plan_to_tier(obj: dict[str, Any]) -> SubscriptionTier:
 		return SubscriptionTier.label
 
 	# Fallback: infer from metadata
-	meta_tier: str = obj.get("metadata", {}).get("tier", "")
+	metadata = cast(dict[str, Any], obj.get("metadata") or {})
+	meta_tier = str(metadata.get("tier", ""))
 	try:
 		return SubscriptionTier(meta_tier)
 	except ValueError:
@@ -564,8 +587,8 @@ def _stripe_plan_to_tier(obj: dict[str, Any]) -> SubscriptionTier:
 
 
 def _stripe_interval(obj: dict[str, Any]) -> SubscriptionInterval:
-	plan = obj.get("plan") or {}
-	interval: str = plan.get("interval", "month")
+	plan = cast(dict[str, Any], obj.get("plan") or {})
+	interval = str(plan.get("interval", "month"))
 	return SubscriptionInterval.year if interval == "year" else SubscriptionInterval.month
 
 
@@ -594,14 +617,16 @@ def _paystack_plan_to_tier(plan_code: str) -> SubscriptionTier:
 
 def _paystack_next_billing(data: dict[str, Any]) -> datetime:
 	from dateutil.parser import parse as parse_dt
+
 	next_date = data.get("next_payment_date")
 	if next_date:
 		try:
-			return parse_dt(next_date).replace(tzinfo=timezone.utc)
+			return parse_dt(next_date).replace(tzinfo=UTC)
 		except ValueError:
 			pass
 	from datetime import timedelta
-	return datetime.now(timezone.utc) + timedelta(days=30)
+
+	return datetime.now(UTC) + timedelta(days=30)
 
 
 def _paystack_retry_countdown(retry_num: int) -> int:
@@ -610,6 +635,7 @@ def _paystack_retry_countdown(retry_num: int) -> int:
 
 # ── Shared ─────────────────────────────────────────────────────────────────────
 
+
 def _ts(unix_ts: int | float) -> datetime:
 	"""Convert a Unix timestamp to a timezone-aware datetime."""
-	return datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+	return datetime.fromtimestamp(unix_ts, tz=UTC)

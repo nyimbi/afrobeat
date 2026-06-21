@@ -1,28 +1,34 @@
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import Callable
+from typing import Annotated, Any, cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from gbedu_core.errors import GbeduError
+from gbedu_core.models.job import GenerationJob
+from gbedu_core.models.track import Language, SubGenre
+from gbedu_core.models.user import User
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gbedu_api.config import RATE_LIMIT_CREATOR, RATE_LIMIT_FREE
+from gbedu_api.config import RATE_LIMIT_FREE
 from gbedu_api.deps import get_current_active_user, get_db, get_redis, limiter
 from gbedu_api.services.generation_service import GenerationService
 from gbedu_api.services.ml_client import GenerationRequest
-from gbedu_core.errors import GbeduError
-from gbedu_core.models.job import GenerationJob
-from gbedu_core.models.track import Language, SubGenre
-from gbedu_core.models.user import SubscriptionTier, User
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/generations", tags=["generations"])
 
 
+def _rate_limit[F: Callable[..., Any]](limit_value: str) -> Callable[[F], F]:
+	return cast(Callable[[F], F], cast(Any, limiter).limit(limit_value))
+
+
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class GenerationCreateRequest(BaseModel):
 	model_config = ConfigDict(extra="forbid")
@@ -79,13 +85,14 @@ def _job_response(job: GenerationJob) -> GenerationJobResponse:
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+
 @router.post(
 	"",
 	response_model=GenerationJobResponse,
 	status_code=status.HTTP_202_ACCEPTED,
 	summary="Submit a music generation job",
 )
-@limiter.limit(RATE_LIMIT_FREE)
+@_rate_limit(RATE_LIMIT_FREE)
 async def submit_generation(
 	request: Request,
 	body: GenerationCreateRequest,

@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import structlog
+from gbedu_core._uuid7 import uuid7str
+from gbedu_core.errors import AuthorizationError, GenerationQuotaError, NotFoundError, WorkerError
+from gbedu_core.models.job import TERMINAL_JOB_STATUSES, GenerationJob, JobStatus
+from gbedu_core.models.user import TIER_DAILY_LIMITS, User
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gbedu_core._uuid7 import uuid7str
-from sqlalchemy import text
-
-from gbedu_core.errors import AuthorizationError, GenerationQuotaError, NotFoundError, WorkerError
-from gbedu_core.models.job import GenerationJob, JobStatus, TERMINAL_JOB_STATUSES
-from gbedu_core.models.user import TIER_DAILY_LIMITS, User
-from gbedu_api.services.ml_client import GenerationRequest, MLServiceClient
+if TYPE_CHECKING:
+	from gbedu_api.services.ml_client import GenerationRequest
 
 log = structlog.get_logger(__name__)
 
@@ -110,6 +109,7 @@ class GenerationService:
 		# Enqueue Celery task — import inline to avoid circular dep at module load
 		try:
 			from gbedu_api.worker_tasks import enqueue_generation
+
 			enqueue_generation(job.id)
 		except Exception as exc:
 			log.error("generation.enqueue_failed", job_id=job.id, error=str(exc))
@@ -122,9 +122,7 @@ class GenerationService:
 	async def get_job_status(self, job_id: str, user_id: str) -> GenerationJob:
 		assert job_id and user_id, "job_id and user_id are required"
 
-		result = await self._db.execute(
-			select(GenerationJob).where(GenerationJob.id == job_id)
-		)
+		result = await self._db.execute(select(GenerationJob).where(GenerationJob.id == job_id))
 		job = result.scalar_one_or_none()
 
 		if job is None:
@@ -150,6 +148,7 @@ class GenerationService:
 		if job.celery_task_id:
 			try:
 				from gbedu_api.worker_tasks import revoke_task
+
 				revoke_task(job.celery_task_id)
 			except Exception as exc:
 				log.warning("generation.revoke_failed", task_id=job.celery_task_id, error=str(exc))
@@ -182,9 +181,10 @@ class GenerationService:
 		page_size: int = 20,
 	) -> tuple[list[GenerationJob], int]:
 		assert user_id, "user_id is required"
-		assert page >= 1 and page_size >= 1
+		assert page >= 1
+		assert page_size >= 1
 
-		from sqlalchemy import func, desc
+		from sqlalchemy import desc, func
 
 		count_result = await self._db.execute(
 			select(func.count(GenerationJob.id)).where(GenerationJob.user_id == user_id)

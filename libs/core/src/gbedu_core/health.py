@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from enum import StrEnum
+from importlib import import_module
+from typing import Any, cast
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -11,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 log = structlog.get_logger(__name__)
 
 
-class HealthState(str, Enum):
+def _empty_details() -> dict[str, Any]:
+	return {}
+
+
+class HealthState(StrEnum):
 	healthy = "healthy"
 	degraded = "degraded"
 	unhealthy = "unhealthy"
@@ -22,7 +27,7 @@ class HealthStatus:
 	name: str
 	state: HealthState
 	latency_ms: float
-	details: dict[str, Any] = field(default_factory=dict)
+	details: dict[str, Any] = field(default_factory=_empty_details)
 	error: str | None = None
 
 	@property
@@ -69,6 +74,7 @@ async def check_database(engine: AsyncEngine) -> HealthStatus:
 	start = time.perf_counter()
 	try:
 		from sqlalchemy import text
+
 		async with engine.connect() as conn:
 			await conn.execute(text("SELECT 1"))
 		latency_ms = (time.perf_counter() - start) * 1000
@@ -94,7 +100,7 @@ async def check_redis(redis_url: str) -> HealthStatus:
 	try:
 		import redis.asyncio as aioredis
 
-		client = aioredis.from_url(redis_url, socket_connect_timeout=2)
+		client = cast(Any, aioredis).from_url(redis_url, socket_connect_timeout=2)
 		pong = await client.ping()
 		await client.aclose()
 		latency_ms = (time.perf_counter() - start) * 1000
@@ -144,10 +150,12 @@ async def check_ml_service(ml_url: str, api_key: str) -> HealthStatus:
 		)
 
 
-async def check_storage(r2_endpoint: str, bucket: str, access_key: str, secret_key: str) -> HealthStatus:
+async def check_storage(
+	r2_endpoint: str, bucket: str, access_key: str, secret_key: str
+) -> HealthStatus:
 	start = time.perf_counter()
 	try:
-		import aioboto3
+		aioboto3 = cast(Any, import_module("aioboto3"))
 
 		session = aioboto3.Session()
 		async with session.client(

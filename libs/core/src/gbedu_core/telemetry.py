@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from typing import Any, TypeVar
 
 import structlog
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 log = structlog.get_logger(__name__)
 
@@ -52,7 +52,9 @@ def configure_telemetry(service_name: str, otlp_endpoint: str) -> None:  # pragm
 	readers: list[Any] = []
 	if otlp_endpoint:
 		metric_exporter = OTLPMetricExporter(endpoint=otlp_endpoint, insecure=True)
-		readers.append(PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30_000))
+		readers.append(
+			PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30_000)
+		)
 
 	_meter_provider = MeterProvider(resource=resource, metric_readers=readers)
 	metrics.set_meter_provider(_meter_provider)
@@ -91,6 +93,7 @@ def get_meter(name: str | None = None) -> metrics.Meter:
 
 # ── Metric accessors ───────────────────────────────────────────────────────────
 
+
 def record_generation_duration(seconds: float, *, sub_genre: str, model: str) -> None:
 	if _generation_duration_histogram is not None:
 		_generation_duration_histogram.record(
@@ -117,15 +120,18 @@ def increment_error_count(*, error_code: str, service: str) -> None:
 
 # ── @traced decorator ──────────────────────────────────────────────────────────
 
+
 def traced(span_name: str | None = None, *, record_exception: bool = True) -> Callable[[F], F]:
 	"""Decorator that wraps a sync or async function in an OTel span.
 
 	Works with both plain functions and coroutine functions.
 	"""
+
 	def decorator(fn: F) -> F:
 		name = span_name or f"{fn.__module__}.{fn.__qualname__}"
 
 		if _is_coroutine_function(fn):
+
 			@functools.wraps(fn)
 			async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
 				tracer = get_tracer()
@@ -158,6 +164,6 @@ def traced(span_name: str | None = None, *, record_exception: bool = True) -> Ca
 
 
 def _is_coroutine_function(fn: Callable[..., Any]) -> bool:
-	import asyncio
 	import inspect
-	return asyncio.iscoroutinefunction(fn) or inspect.iscoroutinefunction(fn)
+
+	return inspect.iscoroutinefunction(fn)

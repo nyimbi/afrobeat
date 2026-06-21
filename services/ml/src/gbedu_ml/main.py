@@ -2,25 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, cast
 
 import structlog
 import torch
 from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
-from pydantic import BaseModel
 from fastapi.security import APIKeyHeader
-from opentelemetry import trace
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
 from gbedu_core.config import StorageSettings
 from gbedu_core.errors import GenerationError
 from gbedu_core.schemas import GenerationRequest
-from gbedu_core.telemetry import configure_telemetry, get_tracer, record_generation_duration, increment_generation_count, increment_error_count
+from gbedu_core.telemetry import (
+	configure_telemetry,
+	get_tracer,
+	increment_error_count,
+	increment_generation_count,
+	record_generation_duration,
+)
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from pydantic import BaseModel
+
 from gbedu_ml.config import settings
 from gbedu_ml.inference.lyric_generator import LyricGenerator
-from gbedu_ml.inference.music_generator import MusicGenerator, MusicGenerationResult
+from gbedu_ml.inference.music_generator import MusicGenerator
 from gbedu_ml.inference.vocal_synthesizer import VocalSynthesizer
 from gbedu_ml.models.ace_step import AceStepModel
 from gbedu_ml.models.stable_audio import StableAudioModel
@@ -54,6 +61,7 @@ def _require_api_key(api_key: str = Security(_api_key_header)) -> str:
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
+
 async def _load_model(name: str, model: Any) -> None:
 	"""Load a single model, logging a warning (not crashing) on failure."""
 	try:
@@ -65,7 +73,7 @@ async def _load_model(name: str, model: Any) -> None:
 
 
 _GPU_WATCHDOG_INTERVAL_SECONDS = 60
-_GPU_LEAK_ALERT_CONSECUTIVE = 5   # alert after this many monotonically rising samples
+_GPU_LEAK_ALERT_CONSECUTIVE = 5  # alert after this many monotonically rising samples
 
 
 async def _gpu_memory_watchdog() -> None:  # pragma: no cover
@@ -90,9 +98,8 @@ async def _gpu_memory_watchdog() -> None:  # pragma: no cover
 			if len(samples) > _GPU_LEAK_ALERT_CONSECUTIVE:
 				samples.pop(0)
 
-			if (
-				len(samples) == _GPU_LEAK_ALERT_CONSECUTIVE
-				and all(samples[i] < samples[i + 1] for i in range(len(samples) - 1))
+			if len(samples) == _GPU_LEAK_ALERT_CONSECUTIVE and all(
+				samples[i] < samples[i + 1] for i in range(len(samples) - 1)
 			):
 				log.critical(
 					"gpu.memory_leak_suspected",
@@ -107,7 +114,7 @@ async def _gpu_memory_watchdog() -> None:  # pragma: no cover
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no cover
 	global _ace_step, _stable_audio, _yue
 	global _lyric_gen, _vocal_synth, _music_gen, _pipeline
 	global _generation_semaphore, _startup_time
@@ -192,15 +199,18 @@ FastAPIInstrumentor.instrument_app(app)
 
 # ── Health / readiness ─────────────────────────────────────────────────────────
 
+
 @app.get("/health", tags=["ops"])
 async def health() -> dict[str, Any]:
 	gpu_info: dict[str, Any] = {}
 	if torch.cuda.is_available():
+		cuda = cast(Any, torch.cuda)
+		device_properties = cuda.get_device_properties(0)
 		gpu_info = {
 			"device": torch.cuda.get_device_name(0),
 			"memory_allocated_mb": round(torch.cuda.memory_allocated(0) / 1024**2, 1),
 			"memory_reserved_mb": round(torch.cuda.memory_reserved(0) / 1024**2, 1),
-			"memory_total_mb": round(torch.cuda.get_device_properties(0).total_memory / 1024**2, 1),
+			"memory_total_mb": round(float(device_properties.total_memory) / 1024**2, 1),
 		}
 
 	return {
@@ -245,7 +255,8 @@ async def list_models(_: str = Depends(_require_api_key)) -> dict[str, Any]:
 
 # ── Generation endpoint ────────────────────────────────────────────────────────
 
-class _GenerateResponse(GenerationPipelineResult):
+
+class _GenerateResponse(GenerationPipelineResult):  # pyright: ignore[reportUnusedClass]
 	pass
 
 
@@ -292,7 +303,9 @@ async def generate(
 				span.set_status(trace.StatusCode.ERROR, str(exc))
 				increment_error_count(error_code="UNEXPECTED", service="gbedu-ml")
 				log.exception("generate.unexpected_error", job_id=job_id)
-				raise HTTPException(status_code=500, detail={"error_code": "UNEXPECTED", "message": str(exc)})
+				raise HTTPException(
+					status_code=500, detail={"error_code": "UNEXPECTED", "message": str(exc)}
+				)
 
 			elapsed = time.perf_counter() - t0
 			record_generation_duration(
@@ -322,6 +335,7 @@ async def generate(
 
 # ── Voice training endpoint ────────────────────────────────────────────────────
 
+
 class _VoiceTrainRequest(BaseModel):
 	voice_model_id: str
 	training_audio_urls: list[str]
@@ -342,8 +356,9 @@ async def voice_train(  # pragma: no cover
 	"""
 	import tempfile
 	import time as _time
-	import httpx
+
 	import boto3
+	import httpx
 
 	assert request.voice_model_id, "voice_model_id required"
 	assert request.training_audio_urls, "training_audio_urls must not be empty"
@@ -366,7 +381,9 @@ async def voice_train(  # pragma: no cover
 
 			# ── Step 1: Download training audio from presigned URLs ─────────
 			voice_samples: list[Path] = []
-			async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)) as client:
+			async with httpx.AsyncClient(
+				timeout=httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
+			) as client:
 				for idx, url in enumerate(request.training_audio_urls):
 					sample_path = tmp_path / f"sample_{idx:03d}.wav"
 					try:
@@ -397,7 +414,11 @@ async def voice_train(  # pragma: no cover
 					output_model_path=output_model_path,
 				)
 			except Exception as exc:
-				log.error("voice_train.training.failed", voice_model_id=request.voice_model_id, exc=str(exc))
+				log.error(
+					"voice_train.training.failed",
+					voice_model_id=request.voice_model_id,
+					exc=str(exc),
+				)
 				span.record_exception(exc)
 				raise HTTPException(status_code=500, detail=f"RVC training failed: {exc}")
 
@@ -413,7 +434,7 @@ async def voice_train(  # pragma: no cover
 
 			# ── Step 3: Upload artifacts to R2 ─────────────────────────────
 			storage = StorageSettings()
-			s3 = boto3.client(
+			s3: Any = cast(Any, boto3).client(
 				"s3",
 				endpoint_url=storage.r2_endpoint_url,
 				aws_access_key_id=storage.r2_access_key_id,
@@ -426,14 +447,18 @@ async def voice_train(  # pragma: no cover
 			loop = asyncio.get_event_loop()
 
 			pth_key = f"{r2_prefix}/model.pth"
-			await loop.run_in_executor(
-				None,
-				lambda: s3.upload_file(
+
+			def _upload_pth() -> None:
+				s3.upload_file(
 					str(pth_path),
 					storage.r2_bucket_name,
 					pth_key,
 					ExtraArgs={"ContentType": "application/octet-stream"},
-				),
+				)
+
+			await loop.run_in_executor(
+				None,
+				_upload_pth,
 			)
 			model_file_url = f"{storage.r2_public_url}/{pth_key}"
 			log.info("voice_train.pth.uploaded", key=pth_key)
@@ -441,14 +466,18 @@ async def voice_train(  # pragma: no cover
 			index_file_url: str | None = None
 			if index_path.exists():
 				index_key = f"{r2_prefix}/model.index"
-				await loop.run_in_executor(
-					None,
-					lambda: s3.upload_file(
+
+				def _upload_index() -> None:
+					s3.upload_file(
 						str(index_path),
 						storage.r2_bucket_name,
 						index_key,
 						ExtraArgs={"ContentType": "application/octet-stream"},
-					),
+					)
+
+				await loop.run_in_executor(
+					None,
+					_upload_index,
 				)
 				index_file_url = f"{storage.r2_public_url}/{index_key}"
 				log.info("voice_train.index.uploaded", key=index_key)

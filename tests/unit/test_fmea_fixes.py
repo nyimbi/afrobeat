@@ -4,18 +4,17 @@ F-10: JWT secret guard — Settings must reject the default key in production.
 F-08: Webhook idempotency — atomic SET NX replaces racy exists()→setex().
 F-19: Non-retryable task failure — job row must transition to 'failed'.
 """
+
 from __future__ import annotations
 
-import asyncio
 import unittest.mock as mock
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
-
 # ── F-10: JWT secret guard ─────────────────────────────────────────────────────
+
 
 def test_jwt_default_secret_rejected_in_production() -> None:
 	"""Settings must raise if the default JWT secret is used in production.
@@ -24,6 +23,7 @@ def test_jwt_default_secret_rejected_in_production() -> None:
 	parent Settings constructor kwargs — so we patch os.environ directly.
 	"""
 	import os
+
 	from gbedu_core.config import Settings
 
 	env = {
@@ -39,6 +39,7 @@ def test_jwt_default_secret_rejected_in_production() -> None:
 def test_jwt_custom_secret_accepted_in_production() -> None:
 	"""A non-default JWT secret must be accepted in production."""
 	import os
+
 	from gbedu_core.config import Settings
 
 	env = {
@@ -57,6 +58,7 @@ def test_jwt_custom_secret_accepted_in_production() -> None:
 def test_jwt_default_secret_allowed_in_development() -> None:
 	"""Development environment must not block the default secret."""
 	import os
+
 	from gbedu_core.config import Settings
 
 	env = {
@@ -71,6 +73,7 @@ def test_jwt_default_secret_allowed_in_development() -> None:
 def test_jwt_default_secret_allowed_in_test() -> None:
 	"""Test environment must not block the default secret."""
 	import os
+
 	from gbedu_core.config import Settings
 
 	env = {
@@ -83,6 +86,7 @@ def test_jwt_default_secret_allowed_in_test() -> None:
 
 
 # ── F-08: Webhook idempotency ──────────────────────────────────────────────────
+
 
 async def _make_redis_mock(set_returns: bool) -> AsyncMock:
 	"""Build a minimal async Redis mock for webhook tests."""
@@ -117,7 +121,10 @@ async def test_stripe_webhook_atomic_claim_on_first_delivery() -> None:
 	request.headers = {"Stripe-Signature": "t=1,v1=abc"}
 
 	with (
-		patch("stripe.Webhook.construct_event", return_value={"id": "evt_1", "type": "ping", "data": {"object": {}}}),
+		patch(
+			"stripe.Webhook.construct_event",
+			return_value={"id": "evt_1", "type": "ping", "data": {"object": {}}},
+		),
 		patch("gbedu_api.routers.payments._handle_stripe_event", new_callable=AsyncMock),
 		patch("gbedu_api.routers.payments.get_settings") as mock_settings,
 	):
@@ -144,8 +151,13 @@ async def test_stripe_webhook_duplicate_rejected_atomically() -> None:
 	request.headers = {"Stripe-Signature": "t=1,v1=abc"}
 
 	with (
-		patch("stripe.Webhook.construct_event", return_value={"id": "evt_1", "type": "ping", "data": {"object": {}}}),
-		patch("gbedu_api.routers.payments._handle_stripe_event", new_callable=AsyncMock) as mock_handler,
+		patch(
+			"stripe.Webhook.construct_event",
+			return_value={"id": "evt_1", "type": "ping", "data": {"object": {}}},
+		),
+		patch(
+			"gbedu_api.routers.payments._handle_stripe_event", new_callable=AsyncMock
+		) as mock_handler,
 		patch("gbedu_api.routers.payments.get_settings") as mock_settings,
 	):
 		mock_settings.return_value.stripe.secret_key = "sk_test"
@@ -166,12 +178,25 @@ async def test_stripe_webhook_releases_claim_on_handler_failure() -> None:
 	redis = await _make_redis_mock(set_returns=True)
 
 	request = MagicMock()
-	request.body = AsyncMock(return_value=b'{"id":"evt_2","type":"invoice.payment_succeeded","data":{"object":{}}}')
+	request.body = AsyncMock(
+		return_value=b'{"id":"evt_2","type":"invoice.payment_succeeded","data":{"object":{}}}'
+	)
 	request.headers = {"Stripe-Signature": "t=1,v1=abc"}
 
 	with (
-		patch("stripe.Webhook.construct_event", return_value={"id": "evt_2", "type": "invoice.payment_succeeded", "data": {"object": {}}}),
-		patch("gbedu_api.routers.payments._handle_stripe_event", new_callable=AsyncMock, side_effect=RuntimeError("DB down")),
+		patch(
+			"stripe.Webhook.construct_event",
+			return_value={
+				"id": "evt_2",
+				"type": "invoice.payment_succeeded",
+				"data": {"object": {}},
+			},
+		),
+		patch(
+			"gbedu_api.routers.payments._handle_stripe_event",
+			new_callable=AsyncMock,
+			side_effect=RuntimeError("DB down"),
+		),
 		patch("gbedu_api.routers.payments.get_settings") as mock_settings,
 	):
 		mock_settings.return_value.stripe.secret_key = "sk_test"
@@ -187,10 +212,11 @@ async def test_stripe_webhook_releases_claim_on_handler_failure() -> None:
 
 # ── F-19: Non-retryable task failure marks job failed ─────────────────────────
 
+
 async def test_mark_job_failed_transitions_non_terminal_job() -> None:
 	"""_mark_job_failed must set status=failed, error_message, completed_at."""
-	from gbedu_worker.tasks.generation import _mark_job_failed  # type: ignore[import]
 	from gbedu_core.models.job import GenerationJob, JobStatus
+	from gbedu_worker.tasks.generation import _mark_job_failed  # type: ignore[import]
 
 	job = GenerationJob(
 		id="job-001",
@@ -221,8 +247,8 @@ async def test_mark_job_failed_transitions_non_terminal_job() -> None:
 
 async def test_mark_job_failed_skips_already_terminal_job() -> None:
 	"""_mark_job_failed must not overwrite a job that already reached a terminal state."""
-	from gbedu_worker.tasks.generation import _mark_job_failed  # type: ignore[import]
 	from gbedu_core.models.job import GenerationJob, JobStatus
+	from gbedu_worker.tasks.generation import _mark_job_failed  # type: ignore[import]
 
 	job = GenerationJob(
 		id="job-002",

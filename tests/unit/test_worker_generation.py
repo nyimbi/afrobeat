@@ -3,16 +3,13 @@ from __future__ import annotations
 """Unit tests for gbedu_worker.tasks.generation async helpers."""
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from gbedu_core.models.job import JobStatus
 
-
 # ── helpers ───────────────────────────────────────────────────────────────
+
 
 def _make_job(job_id: str = "job-1", status: JobStatus = JobStatus.queued) -> MagicMock:
 	job = MagicMock()
@@ -43,6 +40,7 @@ def _make_session(execute_return: Any = None) -> tuple[MagicMock, Any]:
 
 # ── _run_pipeline ─────────────────────────────────────────────────────────
 
+
 async def test_run_pipeline_delegates_to_orchestrator() -> None:
 	from gbedu_worker.tasks.generation import _run_pipeline
 
@@ -57,18 +55,21 @@ async def test_run_pipeline_delegates_to_orchestrator() -> None:
 	async def _ctx():
 		yield session_mock
 
-	with patch("gbedu_worker.tasks.generation.get_async_session", _ctx):
-		with patch(
+	with (
+		patch("gbedu_worker.tasks.generation.get_async_session", _ctx),
+		patch(
 			"gbedu_worker.tasks.generation.GenerationPipelineOrchestrator",
 			return_value=mock_orchestrator,
-		):
-			result = await _run_pipeline("job-1")
+		),
+	):
+		result = await _run_pipeline("job-1")
 
 	assert result["status"] == "complete"
 	mock_orchestrator.run.assert_awaited_once()
 
 
 # ── _mark_job_failed ──────────────────────────────────────────────────────
+
 
 async def test_mark_job_failed_sets_status() -> None:
 	from gbedu_worker.tasks.generation import _mark_job_failed
@@ -111,10 +112,11 @@ async def test_mark_job_failed_no_op_if_not_found() -> None:
 
 # ── _route_to_dlq ─────────────────────────────────────────────────────────
 
+
 def test_route_to_dlq_enqueues_dlq_task() -> None:
-	from gbedu_worker.tasks.generation import _route_to_dlq
-	import structlog
 	import gbedu_worker.tasks.dlq as dlq_mod
+	import structlog
+	from gbedu_worker.tasks.generation import _route_to_dlq
 
 	mock_task = MagicMock()
 	mock_task.apply_async = MagicMock()
@@ -141,9 +143,9 @@ def test_route_to_dlq_enqueues_dlq_task() -> None:
 
 def test_route_to_dlq_dlq_failure_does_not_raise() -> None:
 	"""DLQ publish errors must never mask the original exception."""
-	from gbedu_worker.tasks.generation import _route_to_dlq
-	import structlog
 	import gbedu_worker.tasks.dlq as dlq_mod
+	import structlog
+	from gbedu_worker.tasks.generation import _route_to_dlq
 
 	mock_task = MagicMock()
 	mock_task.apply_async.side_effect = Exception("broker down")
@@ -165,6 +167,7 @@ def test_route_to_dlq_dlq_failure_does_not_raise() -> None:
 
 
 # ── retry countdowns ───────────────────────────────────────────────────────
+
 
 def test_retry_countdown_values() -> None:
 	from gbedu_worker.tasks.generation import _RETRY_COUNTDOWN

@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import secrets
 import hashlib
 import hmac
-from datetime import datetime, timedelta, timezone
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import bcrypt as _bcrypt
 import structlog
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+from jose.exceptions import ExpiredSignatureError
 
 from gbedu_core.errors import TokenExpiredError, TokenInvalidError
 
 log = structlog.get_logger(__name__)
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
@@ -27,17 +26,26 @@ _API_KEY_PREFIX_LENGTH = 8
 
 # ── Password ───────────────────────────────────────────────────────────────────
 
+
+def _bcrypt_input(plain: str) -> bytes:
+	raw = plain.encode("utf-8")
+	if len(raw) <= 72:
+		return raw
+	return b"gbedu-sha256:" + hashlib.sha256(raw).digest()
+
+
 def hash_password(plain: str) -> str:
 	assert plain, "password must not be empty"
-	return _pwd_context.hash(plain)
+	return _bcrypt.hashpw(_bcrypt_input(plain), _bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
 	assert plain and hashed, "both plain and hashed must be non-empty"
-	return _pwd_context.verify(plain, hashed)
+	return _bcrypt.checkpw(_bcrypt_input(plain), hashed.encode("utf-8"))
 
 
 # ── JWT ────────────────────────────────────────────────────────────────────────
+
 
 def create_access_token(
 	subject: str,
@@ -50,7 +58,7 @@ def create_access_token(
 	assert secret_key, "secret_key must not be empty"
 	assert expires_minutes > 0, "expires_minutes must be positive"
 
-	now = datetime.now(timezone.utc)
+	now = datetime.now(UTC)
 	payload: dict[str, Any] = {
 		"sub": subject,
 		"type": _ACCESS_TOKEN_TYPE,
@@ -75,7 +83,7 @@ def create_refresh_token(
 	assert secret_key, "secret_key must not be empty"
 	assert expires_days > 0, "expires_days must be positive"
 
-	now = datetime.now(timezone.utc)
+	now = datetime.now(UTC)
 	payload: dict[str, Any] = {
 		"sub": subject,
 		"type": _REFRESH_TOKEN_TYPE,
@@ -96,7 +104,7 @@ def decode_token(token: str, secret_key: str, algorithm: str) -> dict[str, Any]:
 
 	try:
 		payload = jwt.decode(token, secret_key, algorithms=[algorithm])
-	except jwt.ExpiredSignatureError:
+	except ExpiredSignatureError:
 		raise TokenExpiredError()
 	except JWTError as e:
 		raise TokenInvalidError() from e
@@ -134,6 +142,7 @@ def verify_refresh_token(token: str, secret_key: str, algorithm: str) -> dict[st
 
 # ── API Keys ───────────────────────────────────────────────────────────────────
 
+
 def generate_api_key() -> tuple[str, str]:
 	"""Return (raw_key, hashed_key).
 
@@ -160,4 +169,4 @@ def verify_api_key(raw: str, stored_hash: str) -> bool:
 
 def get_api_key_prefix(raw: str) -> str:
 	"""Return the display prefix (first N chars after 'gbedu_') for UI listing."""
-	return raw[:_API_KEY_PREFIX_LENGTH + len("gbedu_")]
+	return raw[: _API_KEY_PREFIX_LENGTH + len("gbedu_")]

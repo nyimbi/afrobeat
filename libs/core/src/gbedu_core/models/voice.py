@@ -14,8 +14,9 @@ if TYPE_CHECKING:
 	from gbedu_core.models.user import User
 
 
-class VoiceArchetype(str, enum.Enum):
+class VoiceArchetype(enum.StrEnum):
 	"""Preset voice archetypes shipped with Gbẹdu — not user-trained."""
+
 	omah_lay_inspired = "omah_lay_inspired"
 	burna_boy_inspired = "burna_boy_inspired"
 	wizkid_inspired = "wizkid_inspired"
@@ -29,12 +30,12 @@ class VoiceArchetype(str, enum.Enum):
 	custom = "custom"
 
 
-class VoiceModelStatus(str, enum.Enum):
-	pending = "pending"         # uploaded, training not started
-	training = "training"       # RVC training job running
-	ready = "ready"             # trained model available for inference
-	failed = "failed"           # training failed
-	deprecated = "deprecated"   # model retired
+class VoiceModelStatus(enum.StrEnum):
+	pending = "pending"  # uploaded, training not started
+	training = "training"  # RVC training job running
+	ready = "ready"  # trained model available for inference
+	failed = "failed"  # training failed
+	deprecated = "deprecated"  # model retired
 
 
 class VoiceModel(Base, TimestampMixin, SoftDeleteMixin):
@@ -60,8 +61,12 @@ class VoiceModel(Base, TimestampMixin, SoftDeleteMixin):
 		index=True,
 	)
 
-	is_preset: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-	is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+	is_preset: Mapped[bool] = mapped_column(
+		Boolean, nullable=False, default=False, server_default="false"
+	)
+	is_public: Mapped[bool] = mapped_column(
+		Boolean, nullable=False, default=False, server_default="false"
+	)
 
 	# R2 paths for model artefacts
 	model_file_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

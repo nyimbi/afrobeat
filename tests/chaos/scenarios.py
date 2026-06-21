@@ -30,23 +30,24 @@ import httpx
 
 # ── configuration ─────────────────────────────────────────────────────────────
 
-TOXIPROXY_API  = "http://localhost:8474"
-API_BASE       = "http://localhost:8000"
-ML_BASE        = "http://localhost:8001"
+TOXIPROXY_API = "http://localhost:8474"
+API_BASE = "http://localhost:8000"
+ML_BASE = "http://localhost:8001"
 
 # Toxiproxy proxy names — must match toxiproxy.json
 PROXY_POSTGRES = "postgres"
-PROXY_REDIS    = "redis"
+PROXY_REDIS = "redis"
 
 # Scenario parameters
-DB_LATENCY_MS       = 500   # injected upstream latency
+DB_LATENCY_MS = 500  # injected upstream latency
 DB_LATENCY_SCENARIO_SECS = 30  # how long to hammer the API under the toxic
-P99_THRESHOLD_MS    = 2000  # SLO: p99 must stay under this
-REDIS_DOWN_REQUESTS = 20    # number of requests to fire while Redis is down
-ML_TIMEOUT_SECS     = 65    # how long to wait for the job to be marked failed
+P99_THRESHOLD_MS = 2000  # SLO: p99 must stay under this
+REDIS_DOWN_REQUESTS = 20  # number of requests to fire while Redis is down
+ML_TIMEOUT_SECS = 65  # how long to wait for the job to be marked failed
 
 
 # ── Toxiproxy REST helpers ────────────────────────────────────────────────────
+
 
 class ToxiproxyClient:
 	def __init__(self, base: str = TOXIPROXY_API) -> None:
@@ -77,10 +78,10 @@ class ToxiproxyClient:
 		attributes: dict[str, Any] | None = None,
 	) -> dict[str, Any]:
 		payload: dict[str, Any] = {
-			"name":       name,
-			"type":       toxic_type,
-			"stream":     stream,
-			"toxicity":   toxicity,
+			"name": name,
+			"type": toxic_type,
+			"stream": stream,
+			"toxicity": toxicity,
 			"attributes": attributes or {},
 		}
 		resp = await self._http.post(f"/proxies/{proxy}/toxics", json=payload)
@@ -103,6 +104,7 @@ class ToxiproxyClient:
 
 # ── health check helper ───────────────────────────────────────────────────────
 
+
 async def _health_check(client: httpx.AsyncClient, label: str) -> None:
 	resp = await client.get("/api/v1/health", timeout=5)
 	if resp.status_code != 200:
@@ -115,8 +117,8 @@ async def _register_test_user(client: httpx.AsyncClient, suffix: str) -> str:
 	resp = await client.post(
 		"/api/v1/auth/register",
 		json={
-			"email":     f"chaos_{suffix}@example.com",
-			"password":  "Chaos_Test_P4ss!",
+			"email": f"chaos_{suffix}@example.com",
+			"password": "Chaos_Test_P4ss!",
 			"full_name": "Chaos Test",
 		},
 	)
@@ -127,6 +129,7 @@ async def _register_test_user(client: httpx.AsyncClient, suffix: str) -> str:
 
 # ── scenario 1: DB latency ────────────────────────────────────────────────────
 
+
 async def scenario_db_latency() -> None:
 	"""
 	Inject 500 ms of latency into the Postgres proxy.
@@ -135,7 +138,7 @@ async def scenario_db_latency() -> None:
 	Remove toxic unconditionally in finally block.
 	"""
 	print("\n=== scenario_db_latency ===")
-	toxi   = ToxiproxyClient()
+	toxi = ToxiproxyClient()
 	client = httpx.AsyncClient(base_url=API_BASE, timeout=10)
 
 	try:
@@ -143,17 +146,17 @@ async def scenario_db_latency() -> None:
 
 		print(f"Injecting {DB_LATENCY_MS} ms DB latency...")
 		await toxi.add_toxic(
-			proxy      = PROXY_POSTGRES,
-			name       = "db_latency_chaos",
-			toxic_type = "latency",
-			stream     = "downstream",
-			toxicity   = 1.0,
-			attributes = {"latency": DB_LATENCY_MS, "jitter": 50},
+			proxy=PROXY_POSTGRES,
+			name="db_latency_chaos",
+			toxic_type="latency",
+			stream="downstream",
+			toxicity=1.0,
+			attributes={"latency": DB_LATENCY_MS, "jitter": 50},
 		)
 
 		latencies_ms: list[float] = []
 		deadline = time.monotonic() + DB_LATENCY_SCENARIO_SECS
-		errors   = 0
+		errors = 0
 
 		while time.monotonic() < deadline:
 			t0 = time.monotonic()
@@ -178,9 +181,7 @@ async def scenario_db_latency() -> None:
 		print(f"  Requests: {len(latencies_ms)}  Errors: {errors}")
 		print(f"  p50={p50:.0f} ms  p99={p99:.0f} ms  threshold={P99_THRESHOLD_MS} ms")
 
-		assert p99 < P99_THRESHOLD_MS, (
-			f"p99 {p99:.0f} ms exceeds SLO of {P99_THRESHOLD_MS} ms"
-		)
+		assert p99 < P99_THRESHOLD_MS, f"p99 {p99:.0f} ms exceeds SLO of {P99_THRESHOLD_MS} ms"
 		print("  PASS: p99 within SLO")
 
 	finally:
@@ -193,6 +194,7 @@ async def scenario_db_latency() -> None:
 
 # ── scenario 2: Redis down ────────────────────────────────────────────────────
 
+
 async def scenario_redis_down() -> None:
 	"""
 	Disconnect Redis via the bandwidth-limiter-to-zero trick.
@@ -202,7 +204,7 @@ async def scenario_redis_down() -> None:
 	Restore Redis at the end.
 	"""
 	print("\n=== scenario_redis_down ===")
-	toxi   = ToxiproxyClient()
+	toxi = ToxiproxyClient()
 	client = httpx.AsyncClient(base_url=API_BASE, timeout=10)
 
 	try:
@@ -214,12 +216,12 @@ async def scenario_redis_down() -> None:
 
 		print("Simulating Redis disconnect (bandwidth → 0)...")
 		await toxi.add_toxic(
-			proxy      = PROXY_REDIS,
-			name       = "redis_disconnect_chaos",
-			toxic_type = "bandwidth",
-			stream     = "downstream",
-			toxicity   = 1.0,
-			attributes = {"rate": 0},
+			proxy=PROXY_REDIS,
+			name="redis_disconnect_chaos",
+			toxic_type="bandwidth",
+			stream="downstream",
+			toxicity=1.0,
+			attributes={"rate": 0},
 		)
 
 		# Allow existing connections to time out
@@ -234,15 +236,15 @@ async def scenario_redis_down() -> None:
 					headers=headers,
 					timeout=6,
 				)
-				print(f"  [{i+1:02d}] status={resp.status_code}")
+				print(f"  [{i + 1:02d}] status={resp.status_code}")
 				# 200 is fine (Redis may be optional for reads), 429, 503 are fine.
 				# 500 means unhandled exception — not acceptable.
 				if resp.status_code == 500:
 					unacceptable_codes.append(resp.status_code)
 			except httpx.TimeoutException:
-				print(f"  [{i+1:02d}] timeout (acceptable under Redis disconnect)")
+				print(f"  [{i + 1:02d}] timeout (acceptable under Redis disconnect)")
 			except Exception as exc:
-				print(f"  [{i+1:02d}] error: {exc}")
+				print(f"  [{i + 1:02d}] error: {exc}")
 
 			await asyncio.sleep(0.25)
 
@@ -263,6 +265,7 @@ async def scenario_redis_down() -> None:
 
 # ── scenario 3: ML timeout ────────────────────────────────────────────────────
 
+
 async def scenario_ml_timeout() -> None:
 	"""
 	Simulate a slow/unresponsive ML service by injecting a 70-second timeout
@@ -278,7 +281,7 @@ async def scenario_ml_timeout() -> None:
 	end-to-end timeout path through the Celery worker's circuit-breaker.
 	"""
 	print("\n=== scenario_ml_timeout ===")
-	toxi   = ToxiproxyClient()
+	toxi = ToxiproxyClient()
 	client = httpx.AsyncClient(base_url=API_BASE, timeout=10)
 
 	ml_toxic_injected = False
@@ -289,17 +292,19 @@ async def scenario_ml_timeout() -> None:
 		# Attempt to inject timeout on ML proxy if it exists in Toxiproxy
 		try:
 			await toxi.add_toxic(
-				proxy      = "ml_service",
-				name       = "ml_timeout_chaos",
-				toxic_type = "timeout",
-				stream     = "upstream",
-				toxicity   = 1.0,
-				attributes = {"timeout": 70000},  # 70 s — longer than worker retry window
+				proxy="ml_service",
+				name="ml_timeout_chaos",
+				toxic_type="timeout",
+				stream="upstream",
+				toxicity=1.0,
+				attributes={"timeout": 70000},  # 70 s — longer than worker retry window
 			)
 			ml_toxic_injected = True
 			print("Injected ML service timeout toxic via Toxiproxy")
 		except httpx.HTTPStatusError:
-			print("No 'ml_service' Toxiproxy proxy found — relying on worker circuit-breaker timeout")
+			print(
+				"No 'ml_service' Toxiproxy proxy found — relying on worker circuit-breaker timeout"
+			)
 
 		# Register and log in
 		token = await _register_test_user(client, "ml_timeout")
@@ -309,10 +314,10 @@ async def scenario_ml_timeout() -> None:
 		resp = await client.post(
 			"/api/v1/generations",
 			json={
-				"prompt":           "A long dark Afrobeats track that will time out",
-				"sub_genre":        "afrobeats",
-				"language":         "english",
-				"energy_level":     7,
+				"prompt": "A long dark Afrobeats track that will time out",
+				"sub_genre": "afrobeats",
+				"language": "english",
+				"energy_level": 7,
 				"duration_seconds": 30,
 			},
 			headers=headers,
@@ -323,9 +328,9 @@ async def scenario_ml_timeout() -> None:
 		job_id = resp.json()["id"]
 		print(f"Submitted job {job_id}, polling for failure...")
 
-		terminal    = {"completed", "failed", "cancelled"}
+		terminal = {"completed", "failed", "cancelled"}
 		final_status: str | None = None
-		deadline    = time.monotonic() + ML_TIMEOUT_SECS
+		deadline = time.monotonic() + ML_TIMEOUT_SECS
 
 		while time.monotonic() < deadline:
 			await asyncio.sleep(5)
@@ -334,7 +339,7 @@ async def scenario_ml_timeout() -> None:
 				headers=headers,
 			)
 			if poll.status_code == 200:
-				data   = poll.json()
+				data = poll.json()
 				status = data.get("status", "")
 				print(f"  status={status}  progress={data.get('progress_percent', 0)}%")
 				if status in terminal:
@@ -367,6 +372,7 @@ async def scenario_ml_timeout() -> None:
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
 
+
 async def main() -> None:
 	scenarios = [
 		scenario_db_latency,
@@ -387,7 +393,7 @@ async def main() -> None:
 			print(f"\n  ERROR in {scenario.__name__}: {type(exc).__name__}: {exc}")
 			failed += 1
 
-	print(f"\n{'='*40}")
+	print(f"\n{'=' * 40}")
 	print(f"Results: {passed} passed, {failed} failed")
 	if failed:
 		raise SystemExit(1)

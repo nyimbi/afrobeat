@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 import torch
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from gbedu_ml.config import settings
 from gbedu_ml.models.base import BaseMusGen
@@ -18,12 +19,17 @@ log = structlog.get_logger(__name__)
 _CHUNK_DURATION_SECONDS = 30
 _MAX_DURATION_SECONDS = 300
 
-_LOAD_RETRY_KWARGS = dict(
-	stop=stop_after_attempt(3),
-	wait=wait_exponential(multiplier=1, min=2, max=10),
-	retry=retry_if_exception_type((OSError, RuntimeError)),
-	reraise=True,
-)
+_LOAD_RETRY_KWARGS = {
+	"stop": stop_after_attempt(3),
+	"wait": wait_exponential(multiplier=1, min=2, max=10),
+	"retry": retry_if_exception_type((OSError, RuntimeError)),
+	"reraise": True,
+}
+
+
+def _load_retry[F: Callable[..., Any]](func: F) -> F:
+	retry_factory = cast(Any, retry)
+	return cast(F, retry_factory(**_LOAD_RETRY_KWARGS)(func))
 
 
 class YuEModel(BaseMusGen):
@@ -44,7 +50,7 @@ class YuEModel(BaseMusGen):
 	def model_id(self) -> str:
 		return settings.YUE_MODEL_ID
 
-	@retry(**_LOAD_RETRY_KWARGS)
+	@_load_retry
 	async def load(self) -> None:  # pragma: no cover
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
@@ -54,14 +60,14 @@ class YuEModel(BaseMusGen):
 
 		log.info("yue.load.start", model=self.model_id, device=self._device)
 
-		self._tokenizer = AutoTokenizer.from_pretrained(
+		self._tokenizer = cast(Any, AutoTokenizer).from_pretrained(
 			self.model_id,
 			cache_dir=str(settings.MODEL_CACHE_DIR),
 			token=settings.HF_TOKEN,
 		)
 
 		dtype = torch.float16 if "cuda" in self._device else torch.float32
-		self._model = AutoModelForCausalLM.from_pretrained(
+		self._model = cast(Any, AutoModelForCausalLM).from_pretrained(
 			self.model_id,
 			cache_dir=str(settings.MODEL_CACHE_DIR),
 			torch_dtype=dtype,
@@ -74,7 +80,9 @@ class YuEModel(BaseMusGen):
 		self._is_loaded = True
 		log.info("yue.load.done", model=self.model_id)
 
-	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:  # pragma: no cover
+	async def generate(
+		self, prompt: str, duration_seconds: int, **kwargs: Any
+	) -> Path:  # pragma: no cover
 		assert self._model is not None and self._tokenizer is not None, (
 			"model not loaded — call load() first"
 		)
@@ -84,11 +92,14 @@ class YuEModel(BaseMusGen):
 		)
 
 		loop = asyncio.get_event_loop()
-		return await loop.run_in_executor(None, self._generate_sync, prompt, duration_seconds, kwargs)
+		return await loop.run_in_executor(
+			None, self._generate_sync, prompt, duration_seconds, kwargs
+		)
 
-	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:  # pragma: no cover
+	def _generate_sync(
+		self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]
+	) -> Path:  # pragma: no cover
 		import torchaudio  # type: ignore[import]
-		import numpy as np  # type: ignore[import]
 
 		out_path = settings.OUTPUT_DIR / f"yue_{uuid.uuid4().hex}.wav"
 
@@ -96,8 +107,9 @@ class YuEModel(BaseMusGen):
 		style_tags = kwargs.get("style_tags", "<afrobeats><west_african><rhythmic>")
 		full_prompt = f"{style_tags}\n{prompt}"
 
-		num_chunks = max(1, (duration_seconds + _CHUNK_DURATION_SECONDS - 1) // _CHUNK_DURATION_SECONDS)
-		samples_per_chunk = _CHUNK_DURATION_SECONDS * self._sample_rate
+		num_chunks = max(
+			1, (duration_seconds + _CHUNK_DURATION_SECONDS - 1) // _CHUNK_DURATION_SECONDS
+		)
 		target_total_samples = duration_seconds * self._sample_rate
 
 		audio_chunks: list[torch.Tensor] = []
@@ -118,7 +130,7 @@ class YuEModel(BaseMusGen):
 
 			# YuE encodes audio as token sequences — decode to waveform
 			# The model outputs interleaved audio codec tokens after the prompt tokens.
-			audio_tokens = outputs[0, inputs["input_ids"].shape[1]:]
+			audio_tokens = outputs[0, inputs["input_ids"].shape[1] :]
 			chunk_audio = self._decode_audio_tokens(audio_tokens)
 			audio_chunks.append(chunk_audio)
 
@@ -136,7 +148,7 @@ class YuEModel(BaseMusGen):
 		if full_audio.dim() == 1:
 			full_audio = full_audio.unsqueeze(0)  # [1, samples]
 
-		torchaudio.save(str(out_path), full_audio.cpu().float(), self._sample_rate)
+		cast(Any, torchaudio).save(str(out_path), full_audio.cpu().float(), self._sample_rate)
 
 		if torch.cuda.is_available():
 			torch.cuda.empty_cache()
@@ -152,16 +164,20 @@ class YuEModel(BaseMusGen):
 		a silence stub so the fallback chain remains intact rather than crashing.
 		"""
 		try:
-			if hasattr(self._model, "decode_audio"):
-				return self._model.decode_audio(tokens)
+			model = self._model
+			if hasattr(model, "decode_audio"):
+				return cast(torch.Tensor, model.decode_audio(tokens))
 			# Heuristic: if the model exposes an audio codec via config, use it
-			if hasattr(self._model.config, "audio_codec_model_id"):
+			if hasattr(model.config, "audio_codec_model_id"):
 				from transformers import EncodecModel  # type: ignore[import]
-				codec = EncodecModel.from_pretrained(
-					self._model.config.audio_codec_model_id
-				).to(self._model.device)
-				decoded = codec.decode(tokens.unsqueeze(0).unsqueeze(0))
-				return decoded.audio_values.squeeze(0).squeeze(0)
+
+				codec = (
+					cast(Any, EncodecModel)
+					.from_pretrained(model.config.audio_codec_model_id)
+					.to(model.device)
+				)
+				decoded = codec.decode(tokens.unsqueeze(0).unsqueeze(0), [None])
+				return cast(torch.Tensor, decoded.audio_values.squeeze(0).squeeze(0))
 		except Exception as exc:
 			log.warning("yue.decode_audio_tokens.failed", error=str(exc))
 

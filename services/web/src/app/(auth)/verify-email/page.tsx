@@ -11,13 +11,12 @@ type VerifyState = "loading" | "verified" | "error"
 function VerifyEmailContent() {
 	const searchParams = useSearchParams()
 	const token = searchParams.get("token")
-	const [state, setState] = useState<VerifyState>("loading")
-	const [errorMsg, setErrorMsg] = useState("")
+	const missingTokenMessage = "No verification token found. Use the link from your email."
+	const [state, setState] = useState<VerifyState>(token ? "loading" : "error")
+	const [errorMsg, setErrorMsg] = useState(token ? "" : missingTokenMessage)
 
 	useEffect(() => {
 		if (!token) {
-			setErrorMsg("No verification token found. Use the link from your email.")
-			setState("error")
 			return
 		}
 		api.auth

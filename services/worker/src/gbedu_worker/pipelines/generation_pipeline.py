@@ -21,12 +21,22 @@ import json
 import tempfile
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import structlog
+from gbedu_core._uuid7 import uuid7str
+from gbedu_core.config import MLSettings, RedisSettings, StorageSettings
+from gbedu_core.models.job import TERMINAL_JOB_STATUSES, GenerationJob, JobStatus
+from gbedu_core.models.track import Track, TrackStatus
+from gbedu_core.telemetry import (
+	get_tracer,
+	increment_error_count,
+	increment_generation_count,
+	record_generation_duration,
+)
 from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,16 +47,6 @@ from tenacity import (
 	wait_exponential,
 )
 
-from gbedu_core._uuid7 import uuid7str
-from gbedu_core.config import MLSettings, RedisSettings, StorageSettings
-from gbedu_core.models.job import GenerationJob, JobStatus, TERMINAL_JOB_STATUSES
-from gbedu_core.models.track import Track, TrackStatus
-from gbedu_core.telemetry import (
-	get_tracer,
-	increment_error_count,
-	increment_generation_count,
-	record_generation_duration,
-)
 from gbedu_worker.exceptions import MLServiceError, UploadError
 
 log = structlog.get_logger(__name__)
@@ -71,11 +71,11 @@ _CHECKPOINT_PREFIX = "pipeline_ckpt:"
 # Values are conservative upper bounds; a hung stage is forced to fail instead of
 # consuming a Celery slot indefinitely.
 _STAGE_TIMEOUT_SECONDS: dict[str, int] = {
-	"ml_generate":    1500,   # 25 min — covers worst-case tenacity retry chain
-	"audio_process":  300,    # 5 min
-	"upload":         180,    # 3 min
-	"create_track":   60,     # 1 min
-	"complete":       30,     # 30 s
+	"ml_generate": 1500,  # 25 min — covers worst-case tenacity retry chain
+	"audio_process": 300,  # 5 min
+	"upload": 180,  # 3 min
+	"create_track": 60,  # 1 min
+	"complete": 30,  # 30 s
 }
 
 
@@ -111,7 +111,11 @@ class GenerationPipelineOrchestrator:
 					"job already in terminal state — idempotent skip",
 					status=job.status.value,
 				)
-				return {"status": "skipped", "reason": "already_terminal", "job_status": job.status.value}
+				return {
+					"status": "skipped",
+					"reason": "already_terminal",
+					"job_status": job.status.value,
+				}
 
 			try:
 				ml_result = await asyncio.wait_for(
@@ -193,10 +197,20 @@ class GenerationPipelineOrchestrator:
 		payload = {
 			"job_id": self._job_id,
 			"prompt": job.prompt_used,
-			**{k: v for k, v in job.metadata_.items() if k in (
-				"sub_genre", "language", "bpm", "energy_level",
-				"key", "duration_seconds", "voice_model_id",
-			)},
+			**{
+				k: v
+				for k, v in job.metadata_.items()
+				if k
+				in (
+					"sub_genre",
+					"language",
+					"bpm",
+					"energy_level",
+					"key",
+					"duration_seconds",
+					"voice_model_id",
+				)
+			},
 		}
 
 		self._log.info("calling ml service", url=_ml_settings.service_url)
@@ -206,7 +220,9 @@ class GenerationPipelineOrchestrator:
 		async for attempt in AsyncRetrying(
 			stop=stop_after_attempt(3),
 			wait=wait_exponential(multiplier=30, min=30, max=270),
-			retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, MLServiceError)),
+			retry=retry_if_exception_type(
+				(httpx.TimeoutException, httpx.NetworkError, MLServiceError)
+			),
 			reraise=True,
 		):
 			with attempt:
@@ -239,9 +255,7 @@ class GenerationPipelineOrchestrator:
 				headers=headers,
 			)
 		if resp.status_code != 200:
-			raise MLServiceError(
-				f"ML service returned {resp.status_code}: {resp.text[:512]}"
-			)
+			raise MLServiceError(f"ML service returned {resp.status_code}: {resp.text[:512]}")
 		data: dict[str, Any] = resp.json()
 		assert "audio_bytes_b64" in data or "audio_url" in data, (
 			f"ML service response missing audio field: {list(data.keys())}"
@@ -378,15 +392,12 @@ class GenerationPipelineOrchestrator:
 			bpm=audio_analysis.get("bpm") or ml_result.get("bpm"),
 			key=audio_analysis.get("key") or ml_result.get("key"),
 			energy_level=meta.get("energy_level", 5),
-			duration_seconds=audio_analysis.get("duration_seconds") or ml_result.get("duration_seconds"),
+			duration_seconds=audio_analysis.get("duration_seconds")
+			or ml_result.get("duration_seconds"),
 			status=TrackStatus.processing,
 			audio_url=urls.get("audio"),
 			audio_url_watermarked=urls.get("audio_watermarked"),
-			stem_urls={
-				k: v
-				for k, v in urls.items()
-				if k.startswith("stem_")
-			},
+			stem_urls={k: v for k, v in urls.items() if k.startswith("stem_")},
 			lyrics=ml_result.get("lyrics"),
 			cover_art_url=urls.get("cover_art"),
 		)
@@ -406,7 +417,7 @@ class GenerationPipelineOrchestrator:
 		ml_result: dict[str, Any],
 	) -> None:
 		"""Mark job complete and track ready."""
-		now = datetime.now(timezone.utc)
+		now = datetime.now(UTC)
 
 		track.status = TrackStatus.ready
 		self._session.add(track)
@@ -455,13 +466,14 @@ class GenerationPipelineOrchestrator:
 		progress: int = 0,
 	) -> None:
 		assert status not in TERMINAL_JOB_STATUSES or status in (
-			JobStatus.complete, JobStatus.failed
+			JobStatus.complete,
+			JobStatus.failed,
 		), f"unexpected terminal transition to {status}"
 
 		job.status = status
 		job.progress_percent = progress
 		if status == JobStatus.ml_generating and job.started_at is None:
-			job.started_at = datetime.now(timezone.utc)
+			job.started_at = datetime.now(UTC)
 		self._session.add(job)
 		await self._session.flush()
 		self._log.debug("status updated", status=status.value, progress=progress)
@@ -477,7 +489,7 @@ class GenerationPipelineOrchestrator:
 
 		key = f"{_CHECKPOINT_PREFIX}{self._job_id}:{stage}"
 		try:
-			r = await aioredis.from_url(
+			r = await cast(Any, aioredis).from_url(
 				_redis_settings.url, encoding="utf-8", decode_responses=True
 			)
 			async with r:
@@ -493,7 +505,7 @@ class GenerationPipelineOrchestrator:
 
 		key = f"{_CHECKPOINT_PREFIX}{self._job_id}:{stage}"
 		try:
-			r = await aioredis.from_url(
+			r = await cast(Any, aioredis).from_url(
 				_redis_settings.url, encoding="utf-8", decode_responses=True
 			)
 			async with r:
@@ -519,14 +531,14 @@ class GenerationPipelineOrchestrator:
 			"job_id": self._job_id,
 			"percent": percent,
 			"message": message,
-			"ts": datetime.now(timezone.utc).isoformat(),
+			"ts": datetime.now(UTC).isoformat(),
 		}
 		if extra:
 			payload.update(extra)
 
 		channel = f"{_JOB_CHANNEL_PREFIX}{self._job_id}"
 		try:
-			redis = await aioredis.from_url(
+			redis = await cast(Any, aioredis).from_url(
 				_redis_settings.url,
 				encoding="utf-8",
 				decode_responses=True,

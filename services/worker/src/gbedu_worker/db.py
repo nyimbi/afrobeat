@@ -4,8 +4,11 @@ from __future__ import annotations
 
 Celery tasks are synchronous by default. We expose two helpers:
 
-1. `run_async(coro)` — runs a coroutine in a fresh event loop (safe because
-   each task runs in its own OS thread / process depending on worker pool).
+1. `run_async(coro_or_func, *args, **kwargs)` — runs a coroutine in a fresh
+   event loop (safe because each task runs in its own OS thread / process
+   depending on worker pool). Passing a coroutine function defers coroutine
+   creation until the runner owns it, which avoids unawaited coroutine leaks
+   when task wrappers are mocked in tests.
 
 2. `get_async_session()` — async context manager yielding an AsyncSession.
    Use inside `run_async()`.
@@ -19,18 +22,17 @@ Usage inside a Celery task:
             async with get_async_session() as session:
                 user = await session.get(User, user_id)
                 ...
-        run_async(_body())
+        run_async(_body)
 """
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any, TypeVar
+from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from gbedu_core.config import DatabaseSettings
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 log = structlog.get_logger(__name__)
 
@@ -85,16 +87,16 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:  # pragma: 
 			raise
 
 
-T = TypeVar("T")
-
-
-def run_async(coro: Any) -> Any:
-	"""Run an async coroutine from a synchronous Celery task body.
+def run_async[T](
+	coro_or_func: Awaitable[T] | Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
+) -> T:
+	"""Run async work from a synchronous Celery task body.
 
 	Creates a new event loop for each call, which is safe because Celery
 	workers run each task body in its own thread (prefork pool: separate
 	process; gevent/eventlet: separate greenlet).
 	"""
+	coro = coro_or_func(*args, **kwargs) if callable(coro_or_func) else coro_or_func
 	loop = asyncio.new_event_loop()
 	try:
 		return loop.run_until_complete(coro)

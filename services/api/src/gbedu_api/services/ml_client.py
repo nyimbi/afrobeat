@@ -1,23 +1,27 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import httpx
 import structlog
 from circuitbreaker import CircuitBreaker, CircuitBreakerError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
 from gbedu_core.config import MLSettings
 from gbedu_core.errors import MLServiceError, MLServiceTimeoutError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 log = structlog.get_logger(__name__)
 
-_ML_RETRY_KWARGS: dict[str, Any] = dict(
-	retry=retry_if_exception_type(httpx.HTTPStatusError),
-	wait=wait_exponential(multiplier=2, min=2, max=30),
-	stop=stop_after_attempt(3),
-	reraise=True,
-)
+_ML_RETRY_KWARGS: dict[str, Any] = {
+	"retry": retry_if_exception_type(httpx.HTTPStatusError),
+	"wait": wait_exponential(multiplier=2, min=2, max=30),
+	"stop": stop_after_attempt(3),
+	"reraise": True,
+}
+
+
+def _ml_retry[F: Callable[..., Any]](func: F) -> F:
+	return cast(F, retry(**_ML_RETRY_KWARGS)(func))
 
 
 class GenerationRequest:
@@ -75,7 +79,7 @@ class MLServiceClient:
 		self._api_key = settings.service_api_key
 		self._inference_timeout = settings.inference_timeout
 
-		self._circuit = CircuitBreaker(
+		self._circuit: Any = CircuitBreaker(
 			failure_threshold=settings.circuit_failure_threshold,
 			recovery_timeout=settings.circuit_recovery_timeout,
 			expected_exception=MLServiceError,
@@ -99,7 +103,7 @@ class MLServiceClient:
 	async def close(self) -> None:
 		await self._http.aclose()
 
-	@retry(**_ML_RETRY_KWARGS)
+	@_ml_retry
 	async def generate_music(self, request: GenerationRequest) -> GenerationResponse:
 		"""Submit a generation request to the ML service.
 
@@ -107,11 +111,12 @@ class MLServiceClient:
 		Raises MLServiceError on circuit breaker open.
 		"""
 		try:
-			@self._circuit
+
 			async def _call() -> httpx.Response:
 				return await self._http.post("/generate", json=request.to_dict())
 
-			resp = await _call()
+			protected_call = cast(Callable[[], Awaitable[httpx.Response]], self._circuit(_call))
+			resp = await protected_call()
 		except CircuitBreakerError as exc:
 			log.warning("ml_client.circuit_open", error=str(exc))
 			raise MLServiceError("ML service circuit breaker is open — queuing job") from exc

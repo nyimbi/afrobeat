@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable
 from datetime import timedelta
+from typing import Any, NoReturn, cast
 
 import structlog
-from celery import Celery
+from celery import Celery, Task
 from celery.signals import (
 	celeryd_after_setup,
 	task_failure,
@@ -15,10 +16,9 @@ from celery.signals import (
 	worker_ready,
 	worker_shutdown,
 )
-from opentelemetry.instrumentation.celery import CeleryInstrumentor
-
 from gbedu_core.config import CelerySettings, ObservabilitySettings
 from gbedu_core.telemetry import configure_telemetry, increment_error_count
+from opentelemetry.instrumentation.celery import CeleryInstrumentor
 
 log = structlog.get_logger(__name__)
 
@@ -27,36 +27,45 @@ _obs_settings = ObservabilitySettings()
 
 app = Celery("gbedu_worker")
 
-app.conf.update(
+
+def celery_task[F: Callable[..., Any]](**options: Any) -> Callable[[F], F]:
+	"""Typed wrapper around Celery's dynamically typed task decorator."""
+	task_factory = cast(Any, app).task
+	return cast(Callable[[F], F], task_factory(**options))
+
+
+def retry_task(task: Task, *, exc: Exception, countdown: int) -> NoReturn:
+	"""Typed wrapper around Task.retry, which is poorly typed in Celery stubs."""
+	raise cast(Any, task).retry(exc=exc, countdown=countdown)
+
+
+def connect_signal[F: Callable[..., Any]](signal: Any) -> Callable[[F], F]:
+	"""Typed wrapper for Celery/blinker signal decorators."""
+	return cast(Callable[[F], F], signal.connect)
+
+
+cast(Any, app).conf.update(
 	broker_url=_celery_settings.broker_url,
 	result_backend=_celery_settings.result_backend,
-
 	# Serialisation
 	task_serializer="json",
 	result_serializer="json",
 	accept_content=["json"],
-
 	# Timezone
 	timezone="UTC",
 	enable_utc=True,
-
 	# Reliability — ack only after the task body returns successfully
 	task_acks_late=True,
 	task_reject_on_worker_lost=True,
-
 	# Single task per fetch so acks_late works correctly across crashes
 	worker_prefetch_multiplier=1,
-
 	# Default concurrency — overridden by GPU worker via CLI --concurrency
 	worker_concurrency=4,
-
 	# Result TTL: keep results 24 h then discard
 	result_expires=86400,
-
 	# Compression
 	task_compression="gzip",
 	result_compression="gzip",
-
 	# Routing
 	task_default_queue="default",
 	task_queues={
@@ -110,10 +119,8 @@ app.conf.update(
 		"gbedu_worker.tasks.notifications.*": {"queue": "low"},
 		"gbedu_worker.tasks.cleanup.*": {"queue": "low"},
 	},
-
 	# Default retry policy applied to all tasks unless overridden
 	task_acks_on_failure_or_timeout=True,
-
 	# Beat schedule
 	beat_schedule={
 		"cleanup-expired-temp-files": {
@@ -138,6 +145,7 @@ app.conf.update(
 
 # ── OpenTelemetry ──────────────────────────────────────────────────────────────
 
+
 def _instrument_otel() -> None:
 	configure_telemetry(
 		service_name="gbedu-worker",
@@ -149,23 +157,24 @@ def _instrument_otel() -> None:
 
 # ── Celery signals ─────────────────────────────────────────────────────────────
 
-@worker_ready.connect
+
+@connect_signal(worker_ready)
 def on_worker_ready(sender: object, **kwargs: object) -> None:  # pragma: no cover
 	_instrument_otel()
 	log.info("celery worker ready", queues=["high", "default", "low"])
 
 
-@worker_shutdown.connect
+@connect_signal(worker_shutdown)
 def on_worker_shutdown(sender: object, **kwargs: object) -> None:  # pragma: no cover
 	log.info("celery worker shutting down")
 
 
-@celeryd_after_setup.connect
+@connect_signal(celeryd_after_setup)
 def on_worker_setup(sender: str, instance: object, **kwargs: object) -> None:  # pragma: no cover
 	log.info("celery worker configured", hostname=sender)
 
 
-@task_prerun.connect
+@connect_signal(task_prerun)
 def on_task_prerun(  # pragma: no cover
 	task_id: str,
 	task: object,
@@ -180,7 +189,7 @@ def on_task_prerun(  # pragma: no cover
 	)
 
 
-@task_postrun.connect
+@connect_signal(task_postrun)
 def on_task_postrun(  # pragma: no cover
 	task_id: str,
 	task: object,
@@ -198,7 +207,7 @@ def on_task_postrun(  # pragma: no cover
 	)
 
 
-@task_failure.connect
+@connect_signal(task_failure)
 def on_task_failure(  # pragma: no cover
 	task_id: str,
 	exception: Exception,
@@ -215,7 +224,7 @@ def on_task_failure(  # pragma: no cover
 	increment_error_count(error_code=type(exception).__name__, service="worker")
 
 
-@task_retry.connect
+@connect_signal(task_retry)
 def on_task_retry(  # pragma: no cover
 	request: object,
 	reason: Exception,
@@ -229,7 +238,7 @@ def on_task_retry(  # pragma: no cover
 	)
 
 
-@task_success.connect
+@connect_signal(task_success)
 def on_task_success(  # pragma: no cover
 	sender: object,
 	result: object,
@@ -239,7 +248,7 @@ def on_task_success(  # pragma: no cover
 
 
 # ── Import all task modules so Celery discovers them ──────────────────────────
-app.autodiscover_tasks(
+cast(Any, app).autodiscover_tasks(
 	[
 		"gbedu_worker.tasks.generation",
 		"gbedu_worker.tasks.audio",

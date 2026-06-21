@@ -11,12 +11,12 @@ from gbedu_core._uuid7 import uuid7str
 from gbedu_core.db import Base, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
-	from gbedu_core.models.user import User
 	from gbedu_core.models.job import GenerationJob
 	from gbedu_core.models.marketplace import BeatListing
+	from gbedu_core.models.user import User
 
 
-class SubGenre(str, enum.Enum):
+class SubGenre(enum.StrEnum):
 	afropop = "afropop"
 	afrofusion = "afrofusion"
 	alte = "alte"
@@ -40,7 +40,7 @@ class SubGenre(str, enum.Enum):
 	afro_soca = "afro_soca"
 
 
-class Language(str, enum.Enum):
+class Language(enum.StrEnum):
 	english = "english"
 	pidgin = "pidgin"
 	yoruba = "yoruba"
@@ -53,7 +53,7 @@ class Language(str, enum.Enum):
 	twi = "twi"
 
 
-class TrackStatus(str, enum.Enum):
+class TrackStatus(enum.StrEnum):
 	generating = "generating"
 	processing = "processing"
 	ready = "ready"
@@ -74,12 +74,8 @@ class Track(Base, TimestampMixin, SoftDeleteMixin):
 	title: Mapped[str] = mapped_column(String(256), nullable=False)
 	prompt: Mapped[str] = mapped_column(Text, nullable=False)
 
-	sub_genre: Mapped[SubGenre] = mapped_column(
-		Enum(SubGenre, name="sub_genre"), nullable=False
-	)
-	language: Mapped[Language] = mapped_column(
-		Enum(Language, name="language"), nullable=False
-	)
+	sub_genre: Mapped[SubGenre] = mapped_column(Enum(SubGenre, name="sub_genre"), nullable=False)
+	language: Mapped[Language] = mapped_column(Enum(Language, name="language"), nullable=False)
 
 	bpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
 	key: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -99,17 +95,23 @@ class Track(Base, TimestampMixin, SoftDeleteMixin):
 	audio_url_watermarked: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
 	# {"drums": url, "bass": url, "melody": url, "vocals": url}
-	stem_urls: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+	stem_urls: Mapped[dict[str, Any]] = mapped_column(
+		JSONB, nullable=False, default=dict, server_default="{}"
+	)
 
 	lyrics: Mapped[str | None] = mapped_column(Text, nullable=True)
 	cover_art_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
-	is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+	is_public: Mapped[bool] = mapped_column(
+		Boolean, nullable=False, default=False, server_default="false"
+	)
 	play_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 	share_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 	# Free-form JSONB bag for distribution metadata, remaster URLs, platform IDs, etc.
-	metadata_: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+	metadata_: Mapped[dict[str, Any]] = mapped_column(
+		JSONB, nullable=False, default=dict, server_default="{}"
+	)
 
 	# ── Relationships ──────────────────────────────────────────────────────────
 	user: Mapped[User] = relationship("User", back_populates="tracks", lazy="noload")

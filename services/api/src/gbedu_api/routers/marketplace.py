@@ -1,24 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, cast
 
 import httpx
 import stripe
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
+from gbedu_core._uuid7 import uuid7str
+from gbedu_core.models.marketplace import BeatListing, BeatPurchase, LicenseType, ListingStatus
+from gbedu_core.models.track import SubGenre, Track, TrackStatus
+from gbedu_core.models.user import SubscriptionTier, User
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gbedu_api.config import get_settings
 from gbedu_api.deps import get_current_active_user, get_db, require_tier
-from gbedu_core._uuid7 import uuid7str
-from gbedu_core.errors import AuthorizationError, GbeduError, NotFoundError
-from gbedu_core.models.marketplace import BeatListing, BeatPurchase, LicenseType, ListingStatus
-from gbedu_core.models.payment import Payment, PaymentProvider, PaymentStatus
-from gbedu_core.models.track import SubGenre, Track, TrackStatus
-from gbedu_core.models.user import SubscriptionTier, User
 
 log = structlog.get_logger(__name__)
 
@@ -26,6 +24,7 @@ router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class ListingResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
@@ -110,6 +109,7 @@ def _listing_response(listing: BeatListing, track: Track | None = None) -> Listi
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+
 @router.get(
 	"/beats",
 	response_model=PaginatedListingsResponse,
@@ -140,11 +140,14 @@ async def browse_beats(
 
 	# Build query joining Track for genre/BPM filters
 	from sqlalchemy.orm import aliased
+
 	TrackAlias = aliased(Track)
 
-	query = select(BeatListing, TrackAlias).join(
-		TrackAlias, BeatListing.track_id == TrackAlias.id
-	).where(*listing_filters)
+	query = (
+		select(BeatListing, TrackAlias)
+		.join(TrackAlias, BeatListing.track_id == TrackAlias.id)
+		.where(*listing_filters)
+	)
 
 	if sub_genre is not None:
 		query = query.where(TrackAlias.sub_genre == sub_genre)
@@ -156,7 +159,9 @@ async def browse_beats(
 	count_query = select(func.count()).select_from(query.subquery())
 	total = (await db.execute(count_query)).scalar_one()
 
-	paged = query.order_by(desc(BeatListing.created_at)).offset((page - 1) * page_size).limit(page_size)
+	paged = (
+		query.order_by(desc(BeatListing.created_at)).offset((page - 1) * page_size).limit(page_size)
+	)
 	rows = (await db.execute(paged)).all()
 
 	items = [_listing_response(listing, track) for listing, track in rows]
@@ -340,8 +345,9 @@ async def purchase_beat(
 
 	if payment_method == "stripe":
 		stripe.api_key = settings.stripe.secret_key
+		stripe_api = cast(Any, stripe)
 		try:
-			session = stripe.checkout.Session.create(
+			session = stripe_api.checkout.Session.create(
 				payment_method_types=["card"],
 				line_items=[
 					{
@@ -358,17 +364,19 @@ async def purchase_beat(
 				],
 				mode="payment",
 				success_url=(
-					f"{settings.frontend_url}/marketplace"
-					f"?purchase=success&listing_id={listing.id}"
+					f"{settings.frontend_url}/marketplace?purchase=success&listing_id={listing.id}"
 				),
 				cancel_url=f"{settings.frontend_url}/marketplace",
 				metadata=beat_meta,
 			)
-		except stripe.error.StripeError as exc:
+		except stripe_api.error.StripeError as exc:
 			log.error("marketplace.stripe_checkout_failed", listing_id=listing.id, error=str(exc))
 			raise HTTPException(
 				status_code=status.HTTP_502_BAD_GATEWAY,
-				detail={"error_code": "PAYMENT_ERROR", "message": "Failed to create Stripe checkout session"},
+				detail={
+					"error_code": "PAYMENT_ERROR",
+					"message": "Failed to create Stripe checkout session",
+				},
 			)
 		log.info("marketplace.stripe_checkout_created", listing_id=listing.id, buyer_id=user.id)
 		return PurchaseResponse(listing_id=listing.id, checkout_url=session.url)
@@ -393,7 +401,9 @@ async def purchase_beat(
 				},
 			)
 		if resp.status_code != 200:
-			log.error("marketplace.paystack_init_failed", listing_id=listing.id, status=resp.status_code)
+			log.error(
+				"marketplace.paystack_init_failed", listing_id=listing.id, status=resp.status_code
+			)
 			raise HTTPException(
 				status_code=status.HTTP_502_BAD_GATEWAY,
 				detail={"error_code": "PAYMENT_ERROR", "message": "Paystack initialization failed"},
@@ -458,7 +468,7 @@ async def my_purchases(
 	db: Annotated[AsyncSession, Depends(get_db)],
 	page: int = 1,
 	page_size: int = 20,
-) -> dict:
+) -> dict[str, Any]:
 	page = max(1, page)
 	page_size = max(1, min(page_size, 100))
 
@@ -518,14 +528,12 @@ async def refresh_download_url(
 	Only the original buyer may request a refresh.  The new URL is persisted
 	to the database so the user can retrieve it again from /my-purchases.
 	"""
-	from gbedu_api.deps import get_storage
-	from gbedu_api.config import get_settings
 	from gbedu_core.config import StorageSettings
 	from gbedu_core.models.track import Track
 
-	result = await db.execute(
-		select(BeatPurchase).where(BeatPurchase.id == purchase_id)
-	)
+	from gbedu_api.deps import get_storage
+
+	result = await db.execute(select(BeatPurchase).where(BeatPurchase.id == purchase_id))
 	purchase = result.scalar_one_or_none()
 
 	if purchase is None:
@@ -567,13 +575,18 @@ async def refresh_download_url(
 		storage = await get_storage()
 		download_url = await storage.get_presigned_url(r2_key, expires_in=_BEAT_DOWNLOAD_EXPIRES)
 	except Exception as exc:
-		log.error("marketplace.refresh_download.presign_failed", purchase_id=purchase_id, exc=str(exc))
+		log.error(
+			"marketplace.refresh_download.presign_failed", purchase_id=purchase_id, exc=str(exc)
+		)
 		raise HTTPException(
 			status_code=status.HTTP_502_BAD_GATEWAY,
-			detail={"error_code": "STORAGE_ERROR", "message": "Failed to generate download link. Try again shortly."},
+			detail={
+				"error_code": "STORAGE_ERROR",
+				"message": "Failed to generate download link. Try again shortly.",
+			},
 		)
 
-	expires_at = datetime.now(timezone.utc) + timedelta(seconds=_BEAT_DOWNLOAD_EXPIRES)
+	expires_at = datetime.now(UTC) + timedelta(seconds=_BEAT_DOWNLOAD_EXPIRES)
 
 	purchase.download_url = download_url
 	purchase.download_expires_at = expires_at

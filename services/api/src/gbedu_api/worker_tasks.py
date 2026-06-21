@@ -7,6 +7,9 @@ virtualenv. All calls are wrapped so that ImportError degrades gracefully —
 the job record is already persisted in the DB and a supervisor can re-queue it.
 """
 
+from importlib import import_module
+from typing import Any, cast
+
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -16,7 +19,8 @@ def enqueue_generation(job_id: str) -> None:
 	assert job_id, "job_id required"
 	try:
 		from gbedu_worker.tasks.generation import run_generation_pipeline
-		run_generation_pipeline.delay(job_id)
+
+		cast(Any, run_generation_pipeline).delay(job_id)
 		log.info("worker.enqueue.generation", job_id=job_id)
 	except ImportError:
 		log.warning("worker.not_installed", task="run_generation_pipeline", job_id=job_id)
@@ -25,7 +29,12 @@ def enqueue_generation(job_id: str) -> None:
 def revoke_task(celery_task_id: str) -> None:
 	assert celery_task_id, "celery_task_id required"
 	try:
-		from gbedu_worker.app import celery_app
+		try:
+			celery_module = cast(Any, import_module("gbedu_worker.app"))
+			celery_app = celery_module.celery_app
+		except (AttributeError, ImportError):
+			celery_module = cast(Any, import_module("gbedu_worker.celery_app"))
+			celery_app = celery_module.app
 		celery_app.control.revoke(celery_task_id, terminate=True)
 		log.info("worker.revoke", celery_task_id=celery_task_id)
 	except ImportError:
@@ -36,7 +45,8 @@ def enqueue_voice_training(voice_model_id: str) -> None:
 	assert voice_model_id, "voice_model_id required"
 	try:
 		from gbedu_worker.tasks.voice import train_voice_model
-		train_voice_model.delay(voice_model_id)
+
+		cast(Any, train_voice_model).delay(voice_model_id)
 		log.info("worker.enqueue.voice_training", voice_model_id=voice_model_id)
 	except ImportError:
 		log.warning("worker.not_installed", task="train_voice_model", voice_model_id=voice_model_id)
@@ -46,7 +56,8 @@ def enqueue_welcome_email(user_id: str) -> None:
 	assert user_id, "user_id required"
 	try:
 		from gbedu_worker.tasks.notifications import send_welcome_email
-		send_welcome_email.delay(user_id)
+
+		cast(Any, send_welcome_email).delay(user_id)
 		log.info("worker.enqueue.welcome_email", user_id=user_id)
 	except ImportError:
 		log.warning("worker.not_installed", task="send_welcome_email", user_id=user_id)
@@ -57,7 +68,8 @@ def enqueue_verify_email(user_id: str, verify_url: str) -> None:
 	assert verify_url, "verify_url required"
 	try:
 		from gbedu_worker.tasks.notifications import send_verify_email
-		send_verify_email.delay(user_id, verify_url)
+
+		cast(Any, send_verify_email).delay(user_id, verify_url)
 		log.info("worker.enqueue.verify_email", user_id=user_id)
 	except ImportError:
 		log.warning("worker.not_installed", task="send_verify_email", user_id=user_id)
@@ -68,7 +80,8 @@ def enqueue_password_reset_email(user_id: str, reset_url: str) -> None:
 	assert reset_url, "reset_url required"
 	try:
 		from gbedu_worker.tasks.notifications import send_password_reset_email
-		send_password_reset_email.delay(user_id, reset_url)
+
+		cast(Any, send_password_reset_email).delay(user_id, reset_url)
 		log.info("worker.enqueue.password_reset_email", user_id=user_id)
 	except ImportError:
 		log.warning("worker.not_installed", task="send_password_reset_email", user_id=user_id)

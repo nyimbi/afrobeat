@@ -3,22 +3,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any
+from datetime import UTC, datetime, timedelta
+from inspect import isawaitable
+from typing import Annotated, Any, cast
 
 import httpx
 import stripe
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict
-from redis.asyncio import Redis
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from gbedu_api.config import get_settings
-from gbedu_api.deps import get_current_active_user, get_db, get_redis
 from gbedu_core._uuid7 import uuid7str
-from gbedu_core.errors import GbeduError, PaymentWebhookError
 from gbedu_core.models.payment import (
 	Payment,
 	PaymentProvider,
@@ -28,6 +21,13 @@ from gbedu_core.models.payment import (
 	WebhookEvent,
 )
 from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier, User
+from pydantic import BaseModel, ConfigDict
+from redis.asyncio import Redis
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from gbedu_api.config import get_settings
+from gbedu_api.deps import get_current_active_user, get_db, get_redis
 
 log = structlog.get_logger(__name__)
 
@@ -38,7 +38,14 @@ _PAYSTACK_EVENT_IDEMPOTENCY_PREFIX = "paystack_event:"
 _IDEMPOTENCY_TTL = 86400 * 7  # 7 days
 
 
+async def _add_db_object(db: AsyncSession, obj: object) -> None:
+	maybe_awaitable: Any = db.add(obj)
+	if isawaitable(maybe_awaitable):
+		await maybe_awaitable
+
+
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class CheckoutRequest(BaseModel):
 	model_config = ConfigDict(extra="forbid")
@@ -98,12 +105,16 @@ def _tier_to_stripe_price(tier: SubscriptionTier, interval: SubscriptionInterval
 	if not price_id:
 		raise HTTPException(
 			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-			detail={"error_code": "VALIDATION_ERROR", "message": f"No Stripe price for tier {tier.value}"},
+			detail={
+				"error_code": "VALIDATION_ERROR",
+				"message": f"No Stripe price for tier {tier.value}",
+			},
 		)
 	return price_id
 
 
 # ── Stripe endpoints ───────────────────────────────────────────────────────────
+
 
 @router.post(
 	"/stripe/create-checkout",
@@ -139,6 +150,14 @@ async def stripe_create_checkout(
 		metadata={"user_id": user.id, "tier": body.tier.value},
 	)
 
+	if not session.url:
+		raise HTTPException(
+			status_code=status.HTTP_502_BAD_GATEWAY,
+			detail={
+				"error_code": "PAYMENT_ERROR",
+				"message": "Stripe did not return a checkout URL",
+			},
+		)
 	return CheckoutResponse(checkout_url=session.url, session_id=session.id)
 
 
@@ -158,13 +177,18 @@ async def stripe_webhook(
 	sig_header = request.headers.get("Stripe-Signature", "")
 
 	stripe.api_key = settings.stripe.secret_key
+	stripe_api = cast(Any, stripe)
 	try:
-		event = stripe.Webhook.construct_event(
-			payload, sig_header, settings.stripe.webhook_secret
+		event = cast(
+			dict[str, Any],
+			stripe_api.Webhook.construct_event(payload, sig_header, settings.stripe.webhook_secret),
 		)
-	except stripe.error.SignatureVerificationError as exc:
+	except stripe_api.error.SignatureVerificationError as exc:
 		log.warning("stripe.webhook.invalid_signature", error=str(exc))
-		raise HTTPException(status_code=400, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": "Invalid signature"})
+		raise HTTPException(
+			status_code=400,
+			detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": "Invalid signature"},
+		)
 
 	event_id = event["id"]
 	idempotency_key = f"{_STRIPE_EVENT_IDEMPOTENCY_PREFIX}{event_id}"
@@ -178,9 +202,7 @@ async def stripe_webhook(
 	# Durable path: DB check survives Redis restarts between delivery attempts.
 	# If the webhook was already written to webhook_events, skip processing and
 	# re-prime Redis so the fast path catches the next duplicate.
-	existing = await db.execute(
-		select(WebhookEvent).where(WebhookEvent.event_id == event_id)
-	)
+	existing = await db.execute(select(WebhookEvent).where(WebhookEvent.event_id == event_id))
 	if existing.scalar_one_or_none():
 		await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 		log.info("stripe.webhook.duplicate.db", event_id=event_id)
@@ -192,18 +214,23 @@ async def stripe_webhook(
 	try:
 		await _handle_stripe_event(event, db)
 		# Write durable record within the same transaction as the business logic.
-		db.add(WebhookEvent(
-			id=uuid7str(),
-			event_id=event_id,
-			provider=PaymentProvider.stripe,
-			event_type=event_type,
-			processed_at=datetime.now(timezone.utc),
-		))
+		await _add_db_object(
+			db,
+			WebhookEvent(
+				id=uuid7str(),
+				event_id=event_id,
+				provider=PaymentProvider.stripe,
+				event_type=event_type,
+				processed_at=datetime.now(UTC),
+			),
+		)
 		await db.flush()
 	except Exception as exc:
 		await redis.delete(idempotency_key)
 		log.error("stripe.webhook.handler_error", event_id=event_id, error=str(exc))
-		raise HTTPException(status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)})
+		raise HTTPException(
+			status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)}
+		)
 
 	await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 	return {"status": "ok"}
@@ -213,9 +240,10 @@ async def _handle_stripe_event(event: dict[str, Any], db: AsyncSession) -> None:
 	event_type = event["type"]
 	data = event["data"]["object"]
 
-	if event_type == "customer.subscription.created":
-		await _stripe_subscription_upsert(data, db)
-	elif event_type == "customer.subscription.updated":
+	if (
+		event_type == "customer.subscription.created"
+		or event_type == "customer.subscription.updated"
+	):
 		await _stripe_subscription_upsert(data, db)
 	elif event_type == "customer.subscription.deleted":
 		await _stripe_subscription_cancel(data, db)
@@ -244,8 +272,8 @@ async def _stripe_subscription_upsert(data: dict[str, Any], db: AsyncSession) ->
 	)
 	sub = existing.scalar_one_or_none()
 
-	period_start = datetime.fromtimestamp(data["current_period_start"], tz=timezone.utc)
-	period_end = datetime.fromtimestamp(data["current_period_end"], tz=timezone.utc)
+	period_start = datetime.fromtimestamp(data["current_period_start"], tz=UTC)
+	period_end = datetime.fromtimestamp(data["current_period_end"], tz=UTC)
 
 	if sub is None:
 		sub = Subscription(
@@ -279,8 +307,10 @@ async def _stripe_subscription_upsert(data: dict[str, Any], db: AsyncSession) ->
 
 	user.stripe_customer_id = customer_id
 	user.subscription_status = (
-		SubscriptionStatus.active if status_str == "active"
-		else SubscriptionStatus.past_due if status_str == "past_due"
+		SubscriptionStatus.active
+		if status_str == "active"
+		else SubscriptionStatus.past_due
+		if status_str == "past_due"
 		else SubscriptionStatus.cancelled
 	)
 	db.add(user)
@@ -297,7 +327,7 @@ async def _stripe_subscription_cancel(data: dict[str, Any], db: AsyncSession) ->
 		return
 
 	sub.status = "cancelled"
-	sub.cancelled_at = datetime.now(timezone.utc)
+	sub.cancelled_at = datetime.now(UTC)
 	db.add(sub)
 
 	user_result = await db.execute(select(User).where(User.id == sub.user_id))
@@ -359,6 +389,7 @@ async def _fulfil_beat_purchase(
 	from gbedu_core.config import StorageSettings
 	from gbedu_core.models.marketplace import BeatListing, BeatPurchase, LicenseType, ListingStatus
 	from gbedu_core.models.track import Track
+
 	from gbedu_api.deps import get_storage
 
 	assert listing_id, "listing_id required"
@@ -395,8 +426,10 @@ async def _fulfil_beat_purchase(
 			r2_public_url = storage_settings.r2_public_url.rstrip("/")
 			r2_key = track.audio_url.removeprefix(f"{r2_public_url}/")
 			storage = await get_storage()
-			download_url = await storage.get_presigned_url(r2_key, expires_in=_BEAT_DOWNLOAD_EXPIRES)
-			download_expires_at = datetime.now(timezone.utc) + timedelta(seconds=_BEAT_DOWNLOAD_EXPIRES)
+			download_url = await storage.get_presigned_url(
+				r2_key, expires_in=_BEAT_DOWNLOAD_EXPIRES
+			)
+			download_expires_at = datetime.now(UTC) + timedelta(seconds=_BEAT_DOWNLOAD_EXPIRES)
 		except Exception as exc:
 			# Non-fatal: purchase record is still created. User can re-request
 			# via a dedicated endpoint when the link has expired.
@@ -452,13 +485,14 @@ async def _stripe_invoice_paid(data: dict[str, Any], db: AsyncSession) -> None:
 		status=PaymentStatus.succeeded,
 		amount_minor=data.get("amount_paid", 0),
 		currency=(data.get("currency") or "usd").upper(),
-		paid_at=datetime.now(timezone.utc),
+		paid_at=datetime.now(UTC),
 	)
 	db.add(payment)
 	await db.flush()
 
 
 # ── Stripe portal ──────────────────────────────────────────────────────────────
+
 
 @router.get(
 	"/portal",
@@ -516,6 +550,7 @@ async def get_subscription_status(
 
 # ── Paystack endpoints ─────────────────────────────────────────────────────────
 
+
 @router.post(
 	"/paystack/initialize",
 	response_model=PaystackInitResponse,
@@ -537,7 +572,10 @@ async def paystack_initialize(
 	if amount_minor is None:
 		raise HTTPException(
 			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-			detail={"error_code": "VALIDATION_ERROR", "message": f"No Paystack price for tier {body.tier.value}"},
+			detail={
+				"error_code": "VALIDATION_ERROR",
+				"message": f"No Paystack price for tier {body.tier.value}",
+			},
 		)
 
 	async with httpx.AsyncClient() as http:
@@ -603,9 +641,7 @@ async def paystack_verify(
 
 	if ps_status == "success":
 		# Idempotency guard — the frontend may call verify multiple times on success.
-		existing = await db.execute(
-			select(Payment).where(Payment.provider_payment_id == reference)
-		)
+		existing = await db.execute(select(Payment).where(Payment.provider_payment_id == reference))
 		if existing.scalar_one_or_none() is None:
 			payment = Payment(
 				id=uuid7str(),
@@ -615,7 +651,7 @@ async def paystack_verify(
 				status=PaymentStatus.succeeded,
 				amount_minor=data["amount"],
 				currency=data["currency"],
-				paid_at=datetime.now(timezone.utc),
+				paid_at=datetime.now(UTC),
 			)
 			db.add(payment)
 
@@ -677,9 +713,7 @@ async def paystack_webhook(
 		log.info("paystack.webhook.duplicate.redis", reference=event_ref)
 		return {"status": "already_processed"}
 
-	existing = await db.execute(
-		select(WebhookEvent).where(WebhookEvent.event_id == event_ref)
-	)
+	existing = await db.execute(select(WebhookEvent).where(WebhookEvent.event_id == event_ref))
 	if existing.scalar_one_or_none():
 		await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")
 		log.info("paystack.webhook.duplicate.db", reference=event_ref)
@@ -717,7 +751,9 @@ async def paystack_webhook(
 						try:
 							user.subscription_tier = SubscriptionTier(tier_str)
 							user.subscription_status = SubscriptionStatus.active
-							user.paystack_customer_code = data.get("customer", {}).get("customer_code")
+							user.paystack_customer_code = data.get("customer", {}).get(
+								"customer_code"
+							)
 							db.add(user)
 						except ValueError:
 							pass
@@ -730,22 +766,27 @@ async def paystack_webhook(
 						status=PaymentStatus.succeeded,
 						amount_minor=data["amount"],
 						currency=data["currency"],
-						paid_at=datetime.now(timezone.utc),
+						paid_at=datetime.now(UTC),
 					)
 					db.add(payment)
 					await db.flush()
 	except Exception as exc:
 		await redis.delete(idempotency_key)
 		log.error("paystack.webhook.handler_error", reference=event_ref, error=str(exc))
-		raise HTTPException(status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)})
+		raise HTTPException(
+			status_code=500, detail={"error_code": "PAYMENT_WEBHOOK_ERROR", "message": str(exc)}
+		)
 
-	db.add(WebhookEvent(
-		id=uuid7str(),
-		event_id=event_ref,
-		provider=PaymentProvider.paystack,
-		event_type=event_type,
-		processed_at=datetime.now(timezone.utc),
-	))
+	await _add_db_object(
+		db,
+		WebhookEvent(
+			id=uuid7str(),
+			event_id=event_ref,
+			provider=PaymentProvider.paystack,
+			event_type=event_type,
+			processed_at=datetime.now(UTC),
+		),
+	)
 	await db.flush()
 
 	await redis.setex(idempotency_key, _IDEMPOTENCY_TTL, "1")

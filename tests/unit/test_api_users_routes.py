@@ -7,11 +7,12 @@ Strategy:
   that arise from Model.__new__() in isolated unit tests without a DB session.
 - No @pytest.mark.asyncio — asyncio_mode = "auto" is set project-wide.
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 from starlette.testclient import TestClient
 
@@ -21,10 +22,12 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("GBEDU_ML_API_KEY", "test-ml-internal-api-key")
 
-from gbedu_core.models.user import SubscriptionTier, SubscriptionStatus, TIER_DAILY_LIMITS
+from typing import Never
 
+from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _make_user(tier: str = "free") -> MagicMock:
 	user = MagicMock()
@@ -37,14 +40,14 @@ def _make_user(tier: str = "free") -> MagicMock:
 	user.is_verified = True
 	user.is_active = True
 	user.preferred_language = "en"
-	user.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+	user.created_at = datetime(2025, 1, 1, tzinfo=UTC)
 	user.deleted_at = None
 	return user
 
 
 def _build_client(tier: str = "free"):
+	from gbedu_api.deps import get_current_active_user, get_db
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user
 
 	user = _make_user(tier)
 	mock_db = AsyncMock()
@@ -59,14 +62,16 @@ def _build_client(tier: str = "free"):
 	return client, mock_db, user
 
 
-def teardown_function():
+def teardown_function() -> None:
 	from gbedu_api.main import app
+
 	app.dependency_overrides.clear()
 
 
 # ── GET /users/me ──────────────────────────────────────────────────────────────
 
-def test_get_me_returns_profile():
+
+def test_get_me_returns_profile() -> None:
 	client, _, _ = _build_client()
 
 	resp = client.get("/api/v1/users/me")
@@ -80,12 +85,12 @@ def test_get_me_returns_profile():
 	assert body["is_active"] is True
 
 
-def test_get_me_unauthenticated_returns_401():
-	from gbedu_api.main import app
-	from gbedu_api.deps import get_current_active_user
+def test_get_me_unauthenticated_returns_401() -> None:
 	from fastapi import HTTPException, status
+	from gbedu_api.deps import get_current_active_user
+	from gbedu_api.main import app
 
-	def _deny():
+	def _deny() -> Never:
 		raise HTTPException(
 			status_code=status.HTTP_401_UNAUTHORIZED,
 			detail={"error_code": "AUTHENTICATION_ERROR", "message": "Authentication required"},
@@ -101,7 +106,8 @@ def test_get_me_unauthenticated_returns_401():
 
 # ── PATCH /users/me ────────────────────────────────────────────────────────────
 
-def test_update_me_full_name_updates_in_place():
+
+def test_update_me_full_name_updates_in_place() -> None:
 	client, mock_db, user = _build_client()
 	mock_db.add = MagicMock()
 	mock_db.flush = AsyncMock()
@@ -114,7 +120,7 @@ def test_update_me_full_name_updates_in_place():
 	mock_db.flush.assert_called_once()
 
 
-def test_update_me_preferred_language_accepted():
+def test_update_me_preferred_language_accepted() -> None:
 	client, mock_db, user = _build_client()
 	mock_db.add = MagicMock()
 	mock_db.flush = AsyncMock()
@@ -125,7 +131,7 @@ def test_update_me_preferred_language_accepted():
 	assert user.preferred_language == "yo"
 
 
-def test_update_me_empty_full_name_returns_422():
+def test_update_me_empty_full_name_returns_422() -> None:
 	client, _, _ = _build_client()
 
 	resp = client.patch("/api/v1/users/me", json={"full_name": ""})
@@ -133,7 +139,7 @@ def test_update_me_empty_full_name_returns_422():
 	assert resp.status_code == 422
 
 
-def test_update_me_extra_field_returns_422():
+def test_update_me_extra_field_returns_422() -> None:
 	client, _, _ = _build_client()
 
 	resp = client.patch("/api/v1/users/me", json={"subscription_tier": "pro"})
@@ -141,7 +147,7 @@ def test_update_me_extra_field_returns_422():
 	assert resp.status_code == 422
 
 
-def test_update_me_no_body_fields_is_noop():
+def test_update_me_no_body_fields_is_noop() -> None:
 	client, mock_db, user = _build_client()
 	mock_db.add = MagicMock()
 	mock_db.flush = AsyncMock()
@@ -154,9 +160,10 @@ def test_update_me_no_body_fields_is_noop():
 
 # ── GET /users/me/stats ────────────────────────────────────────────────────────
 
-def test_get_my_stats_returns_counts():
+
+def test_get_my_stats_returns_counts() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, get_redis
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, get_redis
 
 	user = _make_user(tier="creator")
 	mock_db = AsyncMock()
@@ -191,9 +198,9 @@ def test_get_my_stats_returns_counts():
 	assert body["subscription_tier"] == "creator"
 
 
-def test_get_my_stats_no_redis_key_defaults_to_zero():
+def test_get_my_stats_no_redis_key_defaults_to_zero() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, get_redis
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, get_redis
 
 	user = _make_user(tier="free")
 	mock_db = AsyncMock()
@@ -225,9 +232,10 @@ def test_get_my_stats_no_redis_key_defaults_to_zero():
 
 # ── POST /users/me/avatar ──────────────────────────────────────────────────────
 
-def test_upload_avatar_invalid_content_type_returns_422():
+
+def test_upload_avatar_invalid_content_type_returns_422() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, get_storage
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, get_storage
 
 	user = _make_user()
 	mock_db = AsyncMock()
@@ -250,9 +258,9 @@ def test_upload_avatar_invalid_content_type_returns_422():
 	assert resp.json()["detail"]["error_code"] == "VALIDATION_ERROR"
 
 
-def test_upload_avatar_valid_jpeg_updates_avatar_url():
+def test_upload_avatar_valid_jpeg_updates_avatar_url() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, get_storage
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, get_storage
 
 	user = _make_user()
 	mock_db = AsyncMock()
@@ -282,7 +290,8 @@ def test_upload_avatar_valid_jpeg_updates_avatar_url():
 
 # ── DELETE /users/me ───────────────────────────────────────────────────────────
 
-def test_delete_me_soft_deletes_account():
+
+def test_delete_me_soft_deletes_account() -> None:
 	client, mock_db, user = _build_client()
 	user.delete = AsyncMock()
 

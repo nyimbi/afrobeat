@@ -5,6 +5,7 @@ from typing import Any
 
 from gbedu_core.models.track import Language, SubGenre
 from gbedu_core.schemas import GenerationRequest
+
 from gbedu_ml.language.pidgin_patterns import PidginPatternLibrary
 
 _pidgin_lib = PidginPatternLibrary()
@@ -14,110 +15,213 @@ _pidgin_lib = PidginPatternLibrary()
 # Source: 11,604-song analysis of afrikalyrics.com mirror.
 # All line-count targets assume 4-line stanzas (89.9% of stanzas in corpus).
 
+
 @dataclass(frozen=True)
 class CorpusTarget:
-	target_lines: int       # median total lines for this genre
+	target_lines: int  # median total lines for this genre
 	min_lines: int
 	max_lines: int
-	target_stanzas: int     # 4-line stanzas
+	target_stanzas: int  # 4-line stanzas
 	words_per_line: tuple[int, int]  # (min, max)
 	target_words_per_line: int
 	repetition_ratio: float  # proportion of lines that are repeats (hook echoes)
-	rhyme_density: float     # proportion of lines with a shared end-rhyme
-	hook_repeats: int        # how many times the hook block recurs
+	rhyme_density: float  # proportion of lines with a shared end-rhyme
+	hook_repeats: int  # how many times the hook block recurs
 
 
 CORPUS_TARGETS: dict[SubGenre, CorpusTarget] = {
 	SubGenre.afrobeats: CorpusTarget(
-		target_lines=34, min_lines=28, max_lines=42,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.25, rhyme_density=0.69, hook_repeats=3,
+		target_lines=34,
+		min_lines=28,
+		max_lines=42,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.25,
+		rhyme_density=0.69,
+		hook_repeats=3,
 	),
 	SubGenre.afropop: CorpusTarget(
-		target_lines=37, min_lines=30, max_lines=44,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.25, rhyme_density=0.67, hook_repeats=3,
+		target_lines=37,
+		min_lines=30,
+		max_lines=44,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.25,
+		rhyme_density=0.67,
+		hook_repeats=3,
 	),
 	SubGenre.afrofusion: CorpusTarget(
-		target_lines=36, min_lines=28, max_lines=44,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.24, rhyme_density=0.67, hook_repeats=3,
+		target_lines=36,
+		min_lines=28,
+		max_lines=44,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.24,
+		rhyme_density=0.67,
+		hook_repeats=3,
 	),
 	SubGenre.alte: CorpusTarget(
-		target_lines=30, min_lines=22, max_lines=40,
-		target_stanzas=7, words_per_line=(4, 9), target_words_per_line=6,
-		repetition_ratio=0.18, rhyme_density=0.55, hook_repeats=2,
+		target_lines=30,
+		min_lines=22,
+		max_lines=40,
+		target_stanzas=7,
+		words_per_line=(4, 9),
+		target_words_per_line=6,
+		repetition_ratio=0.18,
+		rhyme_density=0.55,
+		hook_repeats=2,
 	),
 	SubGenre.highlife: CorpusTarget(
-		target_lines=39, min_lines=32, max_lines=50,
-		target_stanzas=10, words_per_line=(6, 9), target_words_per_line=7,
-		repetition_ratio=0.26, rhyme_density=0.66, hook_repeats=3,
+		target_lines=39,
+		min_lines=32,
+		max_lines=50,
+		target_stanzas=10,
+		words_per_line=(6, 9),
+		target_words_per_line=7,
+		repetition_ratio=0.26,
+		rhyme_density=0.66,
+		hook_repeats=3,
 	),
 	SubGenre.bongo_flava: CorpusTarget(
-		target_lines=33, min_lines=26, max_lines=42,
-		target_stanzas=9, words_per_line=(4, 7), target_words_per_line=5,
-		repetition_ratio=0.23, rhyme_density=0.70, hook_repeats=3,
+		target_lines=33,
+		min_lines=26,
+		max_lines=42,
+		target_stanzas=9,
+		words_per_line=(4, 7),
+		target_words_per_line=5,
+		repetition_ratio=0.23,
+		rhyme_density=0.70,
+		hook_repeats=3,
 	),
 	SubGenre.soukous: CorpusTarget(
-		target_lines=36, min_lines=28, max_lines=46,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.23, rhyme_density=0.64, hook_repeats=2,
+		target_lines=36,
+		min_lines=28,
+		max_lines=46,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.23,
+		rhyme_density=0.64,
+		hook_repeats=2,
 	),
 	SubGenre.amapiano_cross: CorpusTarget(
-		target_lines=36, min_lines=28, max_lines=46,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.29, rhyme_density=0.71, hook_repeats=4,
+		target_lines=36,
+		min_lines=28,
+		max_lines=46,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.29,
+		rhyme_density=0.71,
+		hook_repeats=4,
 	),
 	SubGenre.mbalax: CorpusTarget(
-		target_lines=36, min_lines=28, max_lines=46,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.20, rhyme_density=0.61, hook_repeats=2,
+		target_lines=36,
+		min_lines=28,
+		max_lines=46,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.20,
+		rhyme_density=0.61,
+		hook_repeats=2,
 	),
 	SubGenre.afrobeats_uk: CorpusTarget(
-		target_lines=35, min_lines=28, max_lines=44,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.24, rhyme_density=0.67, hook_repeats=3,
+		target_lines=35,
+		min_lines=28,
+		max_lines=44,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.24,
+		rhyme_density=0.67,
+		hook_repeats=3,
 	),
 	# Caribbean
 	SubGenre.soca: CorpusTarget(
-		target_lines=28, min_lines=22, max_lines=36,
-		target_stanzas=7, words_per_line=(4, 7), target_words_per_line=5,
-		repetition_ratio=0.35, rhyme_density=0.75, hook_repeats=4,
+		target_lines=28,
+		min_lines=22,
+		max_lines=36,
+		target_stanzas=7,
+		words_per_line=(4, 7),
+		target_words_per_line=5,
+		repetition_ratio=0.35,
+		rhyme_density=0.75,
+		hook_repeats=4,
 	),
 	SubGenre.calypso: CorpusTarget(
-		target_lines=40, min_lines=32, max_lines=50,
-		target_stanzas=10, words_per_line=(6, 10), target_words_per_line=8,
-		repetition_ratio=0.20, rhyme_density=0.72, hook_repeats=2,
+		target_lines=40,
+		min_lines=32,
+		max_lines=50,
+		target_stanzas=10,
+		words_per_line=(6, 10),
+		target_words_per_line=8,
+		repetition_ratio=0.20,
+		rhyme_density=0.72,
+		hook_repeats=2,
 	),
 	# Kenyan
 	SubGenre.gengetone: CorpusTarget(
-		target_lines=28, min_lines=20, max_lines=38,
-		target_stanzas=7, words_per_line=(4, 8), target_words_per_line=5,
-		repetition_ratio=0.28, rhyme_density=0.65, hook_repeats=3,
+		target_lines=28,
+		min_lines=20,
+		max_lines=38,
+		target_stanzas=7,
+		words_per_line=(4, 8),
+		target_words_per_line=5,
+		repetition_ratio=0.28,
+		rhyme_density=0.65,
+		hook_repeats=3,
 	),
 	SubGenre.benga: CorpusTarget(
-		target_lines=36, min_lines=28, max_lines=46,
-		target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-		repetition_ratio=0.22, rhyme_density=0.65, hook_repeats=3,
+		target_lines=36,
+		min_lines=28,
+		max_lines=46,
+		target_stanzas=9,
+		words_per_line=(5, 8),
+		target_words_per_line=6,
+		repetition_ratio=0.22,
+		rhyme_density=0.65,
+		hook_repeats=3,
 	),
 	# East African coastal
 	SubGenre.taarab: CorpusTarget(
-		target_lines=42, min_lines=34, max_lines=52,
-		target_stanzas=10, words_per_line=(6, 9), target_words_per_line=7,
-		repetition_ratio=0.18, rhyme_density=0.70, hook_repeats=2,
+		target_lines=42,
+		min_lines=34,
+		max_lines=52,
+		target_stanzas=10,
+		words_per_line=(6, 9),
+		target_words_per_line=7,
+		repetition_ratio=0.18,
+		rhyme_density=0.70,
+		hook_repeats=2,
 	),
 	# Cross-Atlantic fusion
 	SubGenre.afro_soca: CorpusTarget(
-		target_lines=30, min_lines=24, max_lines=38,
-		target_stanzas=7, words_per_line=(4, 7), target_words_per_line=5,
-		repetition_ratio=0.32, rhyme_density=0.72, hook_repeats=4,
+		target_lines=30,
+		min_lines=24,
+		max_lines=38,
+		target_stanzas=7,
+		words_per_line=(4, 7),
+		target_words_per_line=5,
+		repetition_ratio=0.32,
+		rhyme_density=0.72,
+		hook_repeats=4,
 	),
 }
 
 _DEFAULT_TARGET = CorpusTarget(
-	target_lines=35, min_lines=28, max_lines=44,
-	target_stanzas=9, words_per_line=(5, 8), target_words_per_line=6,
-	repetition_ratio=0.25, rhyme_density=0.68, hook_repeats=3,
+	target_lines=35,
+	min_lines=28,
+	max_lines=44,
+	target_stanzas=9,
+	words_per_line=(5, 8),
+	target_words_per_line=6,
+	repetition_ratio=0.25,
+	rhyme_density=0.68,
+	hook_repeats=3,
 )
 
 
@@ -244,7 +348,14 @@ SUBGENRE_PRIORS: dict[SubGenre, dict[str, Any]] = {
 			"brushed hi-hats, minimal percussion allowing space, "
 			"occasional hand-clap on the 4, ambient room sound"
 		),
-		"mood_words": ["dreamy", "introspective", "hazy", "artistic", "experimental", "melancholic"],
+		"mood_words": [
+			"dreamy",
+			"introspective",
+			"hazy",
+			"artistic",
+			"experimental",
+			"melancholic",
+		],
 		"production_style": (
 			"indie Afrobeats aesthetic, lo-fi processing, "
 			"heavy tape saturation, detuned synths, "
@@ -377,7 +488,14 @@ SUBGENRE_PRIORS: dict[SubGenre, dict[str, Any]] = {
 			"shekere and maracas running simultaneously, "
 			"bass guitar bridging Afrobeats groove and soca clave"
 		),
-		"mood_words": ["electric", "carnival", "cross-cultural", "unstoppable", "euphoric", "fusion"],
+		"mood_words": [
+			"electric",
+			"carnival",
+			"cross-cultural",
+			"unstoppable",
+			"euphoric",
+			"fusion",
+		],
 		"production_style": (
 			"Afro-Soca cross-Atlantic fusion — Lagos production aesthetics "
 			"(punchy compression, warm bass) merged with Port of Spain soca energy "
@@ -619,7 +737,6 @@ _MIX_LANGUAGE_PATTERN: dict[SubGenre, str] = {
 
 
 class AfrobeatsPromptEngine:
-
 	def build_music_prompt(self, request: GenerationRequest) -> str:
 		assert request.prompt, "request.prompt must not be empty"
 
@@ -628,11 +745,7 @@ class AfrobeatsPromptEngine:
 		energy = _energy_descriptor(request.energy_level)
 
 		bpm_low, bpm_high = prior["bpm_range"]
-		bpm_str = (
-			f"{request.bpm} BPM"
-			if request.bpm
-			else f"{bpm_low}–{bpm_high} BPM"
-		)
+		bpm_str = f"{request.bpm} BPM" if request.bpm else f"{bpm_low}–{bpm_high} BPM"
 
 		keys = ", ".join(prior["key_preferences"][:3])
 		mood = ", ".join(prior["mood_words"][:4])
@@ -661,7 +774,9 @@ class AfrobeatsPromptEngine:
 		bpm_low, bpm_high = prior["bpm_range"]
 		wpl_min, wpl_max = target.words_per_line
 
-		sections = song_structure.get("sections", ["verse1", "prehook", "hook", "verse2", "bridge", "outro"])
+		sections = song_structure.get(
+			"sections", ["verse1", "prehook", "hook", "verse2", "bridge", "outro"]
+		)
 		sections_str = " → ".join(sections)
 
 		mix_instruction = _MIX_LANGUAGE_PATTERN.get(

@@ -4,16 +4,15 @@ Tests target the security primitives and DB layer directly without requiring
 the full FastAPI app to be running.  This avoids the import-time dependency on
 services/api which may not be installed in the test environment.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from gbedu_core._uuid7 import uuid7str
-from gbedu_core.models import User, SubscriptionTier, SubscriptionStatus
+from gbedu_core.errors import TokenExpiredError, TokenInvalidError
+from gbedu_core.models import SubscriptionStatus, SubscriptionTier, User
 from gbedu_core.security import (
 	create_access_token,
 	create_refresh_token,
@@ -22,7 +21,8 @@ from gbedu_core.security import (
 	verify_password,
 	verify_refresh_token,
 )
-from gbedu_core.errors import TokenExpiredError, TokenInvalidError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,7 +32,8 @@ _ALG = "HS256"
 
 # ── Register ───────────────────────────────────────────────────────────────────
 
-async def test_register_stores_user(test_db_session: AsyncSession):
+
+async def test_register_stores_user(test_db_session: AsyncSession) -> None:
 	email = f"register-{uuid7str()}@example.com"
 	user = User(
 		id=uuid7str(),
@@ -45,7 +46,7 @@ async def test_register_stores_user(test_db_session: AsyncSession):
 		is_verified=False,
 		preferred_language="en",
 		generation_count_today=0,
-		generation_count_reset_at=datetime.now(timezone.utc),
+		generation_count_reset_at=datetime.now(UTC),
 	)
 	test_db_session.add(user)
 	await test_db_session.flush()
@@ -58,7 +59,7 @@ async def test_register_stores_user(test_db_session: AsyncSession):
 	assert fetched.subscription_tier == SubscriptionTier.free
 
 
-async def test_register_password_is_hashed(test_db_session: AsyncSession):
+async def test_register_password_is_hashed(test_db_session: AsyncSession) -> None:
 	email = f"hash-{uuid7str()}@example.com"
 	plain = "MySecurePass99"
 	user = User(
@@ -72,7 +73,7 @@ async def test_register_password_is_hashed(test_db_session: AsyncSession):
 		is_verified=False,
 		preferred_language="en",
 		generation_count_today=0,
-		generation_count_reset_at=datetime.now(timezone.utc),
+		generation_count_reset_at=datetime.now(UTC),
 	)
 	test_db_session.add(user)
 	await test_db_session.flush()
@@ -85,7 +86,8 @@ async def test_register_password_is_hashed(test_db_session: AsyncSession):
 
 # ── Login ──────────────────────────────────────────────────────────────────────
 
-async def test_login_correct_credentials(test_db_session: AsyncSession):
+
+async def test_login_correct_credentials(test_db_session: AsyncSession) -> None:
 	plain = "LoginPass123"
 	email = f"login-{uuid7str()}@example.com"
 	user = User(
@@ -99,7 +101,7 @@ async def test_login_correct_credentials(test_db_session: AsyncSession):
 		is_verified=True,
 		preferred_language="en",
 		generation_count_today=0,
-		generation_count_reset_at=datetime.now(timezone.utc),
+		generation_count_reset_at=datetime.now(UTC),
 	)
 	test_db_session.add(user)
 	await test_db_session.flush()
@@ -111,21 +113,22 @@ async def test_login_correct_credentials(test_db_session: AsyncSession):
 	assert payload["sub"] == user.id
 
 
-async def test_login_wrong_password_fails():
+async def test_login_wrong_password_fails() -> None:
 	hashed = hash_password("correct-password")
 	assert verify_password("wrong-password", hashed) is False
 
 
 # ── Token issuance ─────────────────────────────────────────────────────────────
 
-async def test_access_token_carries_user_id(test_db_session: AsyncSession, make_user):
+
+async def test_access_token_carries_user_id(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="creator")
 	token = create_access_token(user.id, _SECRET, _ALG, expires_minutes=30)
 	payload = verify_access_token(token, _SECRET, _ALG)
 	assert payload["sub"] == user.id
 
 
-async def test_refresh_token_round_trip(test_db_session: AsyncSession, make_user):
+async def test_refresh_token_round_trip(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	refresh_token = create_refresh_token(user.id, _SECRET, _ALG, expires_days=7)
 	payload = verify_refresh_token(refresh_token, _SECRET, _ALG)
@@ -133,7 +136,7 @@ async def test_refresh_token_round_trip(test_db_session: AsyncSession, make_user
 	assert payload["type"] == "refresh"
 
 
-async def test_access_token_rejected_as_refresh(test_db_session: AsyncSession, make_user):
+async def test_access_token_rejected_as_refresh(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	access_token = create_access_token(user.id, _SECRET, _ALG, expires_minutes=30)
 	with pytest.raises(TokenInvalidError):
@@ -142,7 +145,8 @@ async def test_access_token_rejected_as_refresh(test_db_session: AsyncSession, m
 
 # ── Refresh flow ───────────────────────────────────────────────────────────────
 
-async def test_refresh_issues_new_access_token(test_db_session: AsyncSession, make_user):
+
+async def test_refresh_issues_new_access_token(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="pro")
 	refresh_token = create_refresh_token(user.id, _SECRET, _ALG, expires_days=30)
 
@@ -154,9 +158,10 @@ async def test_refresh_issues_new_access_token(test_db_session: AsyncSession, ma
 	assert new_payload["sub"] == user.id
 
 
-async def test_expired_refresh_token_rejected():
-	from jose import jwt as jose_jwt
+async def test_expired_refresh_token_rejected() -> None:
 	import time
+
+	from jose import jwt as jose_jwt
 
 	expired_payload = {
 		"sub": "user-expired",
@@ -172,7 +177,10 @@ async def test_expired_refresh_token_rejected():
 
 # ── Protected endpoint simulation ──────────────────────────────────────────────
 
-async def test_protected_endpoint_requires_valid_token(test_db_session: AsyncSession, make_user):
+
+async def test_protected_endpoint_requires_valid_token(
+	test_db_session: AsyncSession, make_user
+) -> None:
 	"""Simulate the authentication check a protected endpoint would perform."""
 	user = await make_user(tier="creator")
 	token = create_access_token(user.id, _SECRET, _ALG, expires_minutes=30)
@@ -186,7 +194,7 @@ async def test_protected_endpoint_requires_valid_token(test_db_session: AsyncSes
 	assert fetched.id == user.id
 
 
-async def test_tampered_token_blocked():
+async def test_tampered_token_blocked() -> None:
 	token = create_access_token("user-1", _SECRET, _ALG, expires_minutes=30)
 	parts = token.split(".")
 	tampered = ".".join([parts[0], parts[1], parts[2][:-4] + "XXXX"])
@@ -196,7 +204,8 @@ async def test_tampered_token_blocked():
 
 # ── Logout simulation ──────────────────────────────────────────────────────────
 
-async def test_logout_revokes_refresh_token(test_db_session: AsyncSession, make_user):
+
+async def test_logout_revokes_refresh_token(test_db_session: AsyncSession, make_user) -> None:
 	"""Logout is modelled as marking the refresh_token row as revoked.
 
 	We test the DB write path without needing the HTTP layer.
@@ -219,7 +228,7 @@ async def test_logout_revokes_refresh_token(test_db_session: AsyncSession, make_
 			"user_id": user.id,
 			"token_hash": "deadbeef" * 8,
 			"jti": jti,
-			"expires_at": datetime.now(timezone.utc) + timedelta(days=7),
+			"expires_at": datetime.now(UTC) + timedelta(days=7),
 		},
 	)
 
@@ -239,7 +248,7 @@ async def test_logout_revokes_refresh_token(test_db_session: AsyncSession, make_
 	assert row.revoked_at is not None
 
 
-async def test_revoked_token_is_blocked(test_db_session: AsyncSession, make_user):
+async def test_revoked_token_is_blocked(test_db_session: AsyncSession, make_user) -> None:
 	"""After logout the revoked_at IS NOT NULL — application code must check this."""
 	from sqlalchemy import text
 
@@ -257,7 +266,7 @@ async def test_revoked_token_is_blocked(test_db_session: AsyncSession, make_user
 			"user_id": user.id,
 			"token_hash": "aabbccdd" * 8,
 			"jti": jti,
-			"expires_at": datetime.now(timezone.utc) + timedelta(days=7),
+			"expires_at": datetime.now(UTC) + timedelta(days=7),
 		},
 	)
 

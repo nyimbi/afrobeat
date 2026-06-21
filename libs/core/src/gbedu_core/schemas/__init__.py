@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import enum
 from datetime import datetime
 from typing import Any
 
@@ -18,6 +17,7 @@ _BASE_INPUT_CFG = ConfigDict(extra="forbid")
 
 
 # ── User schemas ───────────────────────────────────────────────────────────────
+
 
 class UserCreate(BaseModel):
 	model_config = _BASE_INPUT_CFG
@@ -47,6 +47,7 @@ class UserRead(BaseModel):
 
 class UserPublic(BaseModel):
 	"""Minimal safe projection for public-facing endpoints (e.g. marketplace seller)."""
+
 	model_config = _BASE_CFG
 
 	id: str
@@ -66,6 +67,7 @@ class UserUpdate(BaseModel):
 
 
 # ── Track schemas ──────────────────────────────────────────────────────────────
+
 
 class TrackCreate(BaseModel):
 	model_config = _BASE_INPUT_CFG
@@ -108,6 +110,7 @@ class TrackRead(BaseModel):
 
 class TrackPublic(BaseModel):
 	"""Public track view — no watermarked URL, no prompt (IP protection)."""
+
 	model_config = _BASE_CFG
 
 	id: str
@@ -125,6 +128,7 @@ class TrackPublic(BaseModel):
 
 
 # ── Generation schemas ─────────────────────────────────────────────────────────
+
 
 class GenerationRequest(BaseModel):
 	model_config = _BASE_INPUT_CFG
@@ -157,6 +161,7 @@ class GenerationResponse(BaseModel):
 
 # ── Job schemas ────────────────────────────────────────────────────────────────
 
+
 class JobRead(BaseModel):
 	model_config = _BASE_CFG
 
@@ -185,6 +190,7 @@ class JobStatusUpdate(BaseModel):
 
 
 # ── Payment schemas ────────────────────────────────────────────────────────────
+
 
 class SubscriptionRead(BaseModel):
 	model_config = _BASE_CFG
@@ -238,6 +244,7 @@ class InvoiceRead(BaseModel):
 
 # ── Voice model schemas ────────────────────────────────────────────────────────
 
+
 class VoiceModelRead(BaseModel):
 	model_config = _BASE_CFG
 
@@ -255,6 +262,7 @@ class VoiceModelRead(BaseModel):
 
 
 # ── Marketplace schemas ────────────────────────────────────────────────────────
+
 
 class BeatListingRead(BaseModel):
 	model_config = _BASE_CFG
@@ -293,6 +301,7 @@ class BeatPurchaseRead(BaseModel):
 
 
 # ── Auth schemas ───────────────────────────────────────────────────────────────
+
 
 class TokenResponse(BaseModel):
 	model_config = _BASE_INPUT_CFG

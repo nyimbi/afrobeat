@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import uuid
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from fastapi import FastAPI, Request, status
@@ -10,6 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from gbedu_core.db import get_engine, init_db
+from gbedu_core.errors import GbeduError
+from gbedu_core.telemetry import configure_telemetry
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from redis.asyncio import Redis
 from slowapi import _rate_limit_exceeded_handler
@@ -20,17 +23,23 @@ from gbedu_api.config import API_VERSION, get_settings
 from gbedu_api.deps import limiter, set_ml_client, set_redis, set_storage_client
 from gbedu_api.middleware.logging import StructlogMiddleware
 from gbedu_api.middleware.request_id import RequestIDMiddleware
-from gbedu_api.routers import auth, contact, generations, health, marketplace, payments, tracks, users, voice_models
-from gbedu_core.config import get_settings as core_settings
-from gbedu_core.db import get_engine, init_db
-from gbedu_core.errors import GbeduError
-from gbedu_core.telemetry import configure_telemetry
+from gbedu_api.routers import (
+	auth,
+	contact,
+	generations,
+	health,
+	marketplace,
+	payments,
+	tracks,
+	users,
+	voice_models,
+)
 
 log = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # pragma: no cover
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no cover
 	settings = get_settings()
 
 	# ── Telemetry / logging ────────────────────────────────────────────────────
@@ -48,9 +57,9 @@ async def lifespan(app: FastAPI):  # pragma: no cover
 	# FMEA A02: never crash on Redis unavailability — start in degraded mode so
 	# the API can still serve requests and retry Redis on the next operation.
 	# asyncio-redis reconnects automatically; rate-limiting falls back to in-process.
-	redis = Redis.from_url(settings.redis.url, decode_responses=False)
+	redis = cast(Redis, cast(Any, Redis).from_url(settings.redis.url, decode_responses=False))
 	try:
-		await redis.ping()
+		await cast(Any, redis).ping()
 		log.info("startup.redis_ready")
 	except Exception as exc:
 		log.critical(
@@ -62,16 +71,18 @@ async def lifespan(app: FastAPI):  # pragma: no cover
 
 	# ── Storage client ─────────────────────────────────────────────────────────
 	from gbedu_api.services.storage_service import LocalStorageClient, StorageClient
+
 	if settings.storage.r2_account_id:
 		storage: StorageClient | LocalStorageClient = StorageClient(settings.storage)
 	else:
 		assert not settings.is_production, "R2_ACCOUNT_ID is required in production"
 		storage = LocalStorageClient()
-	set_storage_client(storage)
+	set_storage_client(cast(StorageClient, storage))
 	log.info("startup.storage_ready")
 
 	# ── ML service client ──────────────────────────────────────────────────────
 	from gbedu_api.services.ml_client import MLServiceClient
+
 	ml_client = MLServiceClient(settings.ml)
 	set_ml_client(ml_client)
 	log.info("startup.ml_client_ready")
@@ -102,7 +113,7 @@ def create_app() -> FastAPI:
 
 	# ── Rate limiter state ─────────────────────────────────────────────────────
 	app.state.limiter = limiter
-	app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+	app.add_exception_handler(RateLimitExceeded, cast(Any, _rate_limit_exceeded_handler))
 
 	# ── Middleware (applied in reverse LIFO order — last added = outermost) ────
 	# Outermost → innermost at request time:
@@ -115,7 +126,14 @@ def create_app() -> FastAPI:
 		allow_origins=settings.allowed_origins_list,
 		allow_credentials=True,
 		allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-		allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Request-ID", "Cache-Control"],
+		allow_headers=[
+			"Authorization",
+			"Content-Type",
+			"Accept",
+			"Origin",
+			"X-Request-ID",
+			"Cache-Control",
+		],
 	)
 
 	# OpenTelemetry ASGI middleware is applied via instrumentor after app creation
@@ -124,11 +142,14 @@ def create_app() -> FastAPI:
 
 	if settings.is_production:
 		from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+
 		app.add_middleware(HTTPSRedirectMiddleware)
 
 	app.add_middleware(
 		TrustedHostMiddleware,
-		allowed_hosts=["*"] if not settings.is_production else [
+		allowed_hosts=["*"]
+		if not settings.is_production
+		else [
 			"api.gbedu.io",
 			"*.gbedu.io",
 		],
@@ -137,7 +158,7 @@ def create_app() -> FastAPI:
 	# ── Error handlers ─────────────────────────────────────────────────────────
 
 	@app.exception_handler(GbeduError)
-	async def gbedu_error_handler(request: Request, exc: GbeduError) -> JSONResponse:
+	async def gbedu_error_handler(request: Request, exc: GbeduError) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
 		request_id = getattr(request.state, "request_id", None)
 		return JSONResponse(
 			status_code=exc.http_status,
@@ -150,7 +171,7 @@ def create_app() -> FastAPI:
 		)
 
 	@app.exception_handler(Exception)
-	async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+	async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
 		request_id = getattr(request.state, "request_id", None)
 		log.error(
 			"unhandled_exception",
@@ -184,15 +205,17 @@ def create_app() -> FastAPI:
 	# Patch _get_route_details to guard against _IncludedRouter objects that lack
 	# a .path attribute (opentelemetry-instrumentation-fastapi <= 0.48b0 bug).
 	import opentelemetry.instrumentation.fastapi as _otel_fastapi
-	_orig_get_route = _otel_fastapi._get_route_details
 
-	def _safe_get_route_details(scope):  # type: ignore[no-untyped-def]
+	otel_fastapi = cast(Any, _otel_fastapi)
+	_orig_get_route = cast(Callable[[Mapping[str, Any]], Any], otel_fastapi._get_route_details)
+
+	def _safe_get_route_details(scope: Mapping[str, Any]) -> Any:
 		try:
 			return _orig_get_route(scope)
 		except AttributeError:
 			return None, {}
 
-	_otel_fastapi._get_route_details = _safe_get_route_details
+	otel_fastapi._get_route_details = _safe_get_route_details
 	FastAPIInstrumentor.instrument_app(app)
 
 	return app

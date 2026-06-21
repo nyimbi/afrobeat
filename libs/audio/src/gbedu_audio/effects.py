@@ -3,18 +3,19 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
+import pedalboard as pedalboard_module
 import structlog
 from opentelemetry import trace
 from pedalboard import (
 	Compressor,
 	HighpassFilter,
-	LowShelfFilter,
-	PeakFilter,
 	HighShelfFilter,
 	Limiter,
-	Pedalboard,
+	LowShelfFilter,
+	PeakFilter,
 )
 
 from gbedu_audio._base import AudioFile, AudioProcessingError, ProcessingResult
@@ -41,7 +42,7 @@ class AudioEffectsChain:
 	"""Pedalboard-based effects chain for Afrobeats mastering."""
 
 	@staticmethod
-	def afrobeats_chain() -> Pedalboard:
+	def afrobeats_chain() -> Any:
 		"""
 		Standard Afrobeats mastering chain:
 		  1. High-pass at 40 Hz (remove sub-rumble)
@@ -54,28 +55,30 @@ class AudioEffectsChain:
 		  - PeakFilter boost centred at 3.5 kHz (presence)
 		  - HighShelfFilter boost at 12 kHz (air)
 		"""
-		return Pedalboard([
-			HighpassFilter(cutoff_frequency_hz=40.0),
-			Compressor(
-				threshold_db=-18.0,
-				ratio=4.0,
-				attack_ms=5.0,
-				release_ms=100.0,
-			),
-			# Bass: +3 dB shelf centred at 80 Hz
-			LowShelfFilter(cutoff_frequency_hz=80.0, gain_db=3.0, q=0.707),
-			# Presence: +2 dB peak at 3.5 kHz, wide Q
-			PeakFilter(cutoff_frequency_hz=3500.0, gain_db=2.0, q=1.0),
-			# Air: +2.5 dB shelf at 12 kHz
-			HighShelfFilter(cutoff_frequency_hz=12000.0, gain_db=2.5, q=0.707),
-			Limiter(threshold_db=-1.0, release_ms=100.0),
-		])
+		return cast(Any, pedalboard_module).Pedalboard(
+			[
+				HighpassFilter(cutoff_frequency_hz=40.0),
+				Compressor(
+					threshold_db=-18.0,
+					ratio=4.0,
+					attack_ms=5.0,
+					release_ms=100.0,
+				),
+				# Bass: +3 dB shelf centred at 80 Hz
+				LowShelfFilter(cutoff_frequency_hz=80.0, gain_db=3.0, q=0.707),
+				# Presence: +2 dB peak at 3.5 kHz, wide Q
+				PeakFilter(cutoff_frequency_hz=3500.0, gain_db=2.0, q=1.0),
+				# Air: +2.5 dB shelf at 12 kHz
+				HighShelfFilter(cutoff_frequency_hz=12000.0, gain_db=2.5, q=0.707),
+				Limiter(threshold_db=-1.0, release_ms=100.0),
+			]
+		)
 
 	async def apply_chain(
 		self,
 		audio_path: Path,
 		output_path: Path,
-		chain: Pedalboard,
+		chain: Any,
 	) -> ProcessingResult:
 		assert audio_path.is_file(), f"audio file not found: {audio_path}"
 		output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,10 +90,19 @@ class AudioEffectsChain:
 			try:
 				loop = asyncio.get_running_loop()
 				await loop.run_in_executor(
-					None, self._apply_chain_sync, audio_path, output_path, chain,
+					None,
+					self._apply_chain_sync,
+					audio_path,
+					output_path,
+					chain,
 				)
 				elapsed = time.perf_counter() - t0
-				log.info("effects chain applied", input=str(audio_path), output=str(output_path), elapsed_s=elapsed)
+				log.info(
+					"effects chain applied",
+					input=str(audio_path),
+					output=str(output_path),
+					elapsed_s=elapsed,
+				)
 				return ProcessingResult(
 					input=_probe_audio_file(audio_path),
 					output=_probe_audio_file(output_path),
@@ -106,7 +118,7 @@ class AudioEffectsChain:
 		self,
 		audio_path: Path,
 		output_path: Path,
-		chain: Pedalboard,
+		chain: Any,
 	) -> None:
 		import soundfile as sf
 

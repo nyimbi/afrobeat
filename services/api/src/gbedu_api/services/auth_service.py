@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 import structlog
-from redis.asyncio import Redis
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.config import get_settings
 from gbedu_core.errors import (
@@ -28,6 +22,10 @@ from gbedu_core.security import (
 	verify_password,
 	verify_refresh_token,
 )
+from redis.asyncio import Redis
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = structlog.get_logger(__name__)
 
@@ -47,7 +45,7 @@ _REFRESH_FAMILY_REVOKE_TTL = 30 * 86400  # 30 days (> max refresh token lifetime
 
 
 def _now() -> datetime:
-	return datetime.now(timezone.utc)
+	return datetime.now(UTC)
 
 
 class TokenPair:

@@ -14,9 +14,8 @@ from email.mime.text import MIMEText
 
 import structlog
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
 from gbedu_core.config import EmailSettings
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/contact", tags=["contact"])

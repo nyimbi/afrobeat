@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from gbedu_ml.config import settings
 
@@ -16,12 +17,18 @@ from gbedu_ml.config import settings
 
 log = structlog.get_logger(__name__)
 
-_LOAD_RETRY_KWARGS = dict(
-	stop=stop_after_attempt(2),
-	wait=wait_exponential(multiplier=1, min=2, max=8),
-	retry=retry_if_exception_type((OSError, RuntimeError)),
-	reraise=True,
-)
+_LOAD_RETRY_KWARGS = {
+	"stop": stop_after_attempt(2),
+	"wait": wait_exponential(multiplier=1, min=2, max=8),
+	"retry": retry_if_exception_type((OSError, RuntimeError)),
+	"reraise": True,
+}
+
+
+def _load_retry[F: Callable[..., Any]](func: F) -> F:
+	retry_factory = cast(Any, retry)
+	return cast(F, retry_factory(**_LOAD_RETRY_KWARGS)(func))
+
 
 # Supported sample rate for RVC v2 models
 _RVC_SAMPLE_RATE = 40000
@@ -37,7 +44,7 @@ class VocalSynthesizer:
 	"""
 
 	def __init__(self) -> None:
-		self._rvc: Any = None
+		self._rvc: object | None = None
 		self._loaded_voice_id: str | None = None
 		self._is_loaded: bool = False
 
@@ -45,7 +52,7 @@ class VocalSynthesizer:
 	def is_loaded(self) -> bool:
 		return self._is_loaded
 
-	@retry(**_LOAD_RETRY_KWARGS)
+	@_load_retry
 	async def load(self) -> None:
 		"""Eagerly validate the RVC environment without loading a specific voice."""
 		loop = asyncio.get_event_loop()
@@ -54,6 +61,7 @@ class VocalSynthesizer:
 	def _check_rvc_env(self) -> None:  # pragma: no cover
 		try:
 			import rvc  # type: ignore[import]  # noqa: F401
+
 			self._is_loaded = True
 			log.info("vocal_synth.rvc.available")
 		except ImportError as exc:
@@ -61,7 +69,9 @@ class VocalSynthesizer:
 			# Non-fatal: vocal synthesis is optional; pipeline continues without it.
 			self._is_loaded = False
 
-	def _resolve_model_paths(self, voice_model_id: str) -> tuple[Path, Path | None]:  # pragma: no cover
+	def _resolve_model_paths(
+		self, voice_model_id: str
+	) -> tuple[Path, Path | None]:  # pragma: no cover
 		"""Return (pth_path, index_path_or_None) for a voice model ID."""
 		base = settings.RVC_MODELS_DIR / voice_model_id
 		pth = base.with_suffix(".pth")
@@ -101,7 +111,6 @@ class VocalSynthesizer:
 		melody_path: Path,
 		voice_model_id: str,
 	) -> Path:
-		import numpy as np  # type: ignore[import]
 		import soundfile as sf  # type: ignore[import]
 
 		pth_path, index_path = self._resolve_model_paths(voice_model_id)
@@ -113,10 +122,13 @@ class VocalSynthesizer:
 
 		# Load model if switching voice or first call
 		if self._loaded_voice_id != voice_model_id or self._rvc is None:
-			self._rvc = RVC(
-				model_path=str(pth_path),
-				index_path=str(index_path) if index_path else None,
-				device=settings.GPU_DEVICE,
+			self._rvc = cast(
+				object,
+				RVC(
+					model_path=str(pth_path),
+					index_path=str(index_path) if index_path else None,
+					device=settings.GPU_DEVICE,
+				),
 			)
 			self._loaded_voice_id = voice_model_id
 			log.info("vocal_synth.model.loaded", voice=voice_model_id)
@@ -129,7 +141,8 @@ class VocalSynthesizer:
 			source_audio = source_audio.mean(axis=1)  # mono
 
 		# RVC voice conversion — pitch shift 0 semitones, feature retrieval ratio 0.75
-		converted = self._rvc.convert(
+		rvc = cast(Any, self._rvc)
+		converted: Any = rvc.convert(
 			input_audio=source_audio,
 			input_sr=source_sr,
 			pitch_shift=0,
@@ -138,7 +151,7 @@ class VocalSynthesizer:
 			protect=0.33,
 		)
 
-		sf.write(str(out_path), converted, _RVC_SAMPLE_RATE)
+		cast(Any, sf).write(str(out_path), converted, _RVC_SAMPLE_RATE)
 		log.info("vocal_synth.synthesized", path=str(out_path), voice=voice_model_id)
 		return out_path
 
@@ -158,11 +171,11 @@ class VocalSynthesizer:
 		assert all(p.exists() for p in voice_samples), "all voice_samples must exist"
 
 		loop = asyncio.get_event_loop()
-		await loop.run_in_executor(
-			None, self._train_sync, voice_samples, output_model_path
-		)
+		await loop.run_in_executor(None, self._train_sync, voice_samples, output_model_path)
 
-	def _train_sync(self, voice_samples: list[Path], output_model_path: Path) -> None:  # pragma: no cover
+	def _train_sync(
+		self, voice_samples: list[Path], output_model_path: Path
+	) -> None:  # pragma: no cover
 		try:
 			from rvc import RVCTrainer  # type: ignore[import]
 		except ImportError as exc:
@@ -174,7 +187,7 @@ class VocalSynthesizer:
 			output=str(output_model_path),
 		)
 
-		trainer = RVCTrainer(
+		trainer = cast(Any, RVCTrainer)(
 			audio_paths=[str(p) for p in voice_samples],
 			output_dir=str(output_model_path.parent),
 			model_name=output_model_path.stem,

@@ -3,10 +3,10 @@
 Tests submit, get_status, cancel, list endpoints.
 GenerationService is mocked to avoid DB/worker dependencies.
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -15,9 +15,8 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("GBEDU_ML_API_KEY", "test-ml-internal-api-key")
 
+from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier
 from starlette.testclient import TestClient
-
-from gbedu_core.models.user import SubscriptionTier, SubscriptionStatus
 
 
 def _make_user(tier: str = "creator") -> MagicMock:
@@ -55,8 +54,8 @@ def _make_job(
 
 
 def _build_client(tier: str = "creator"):
+	from gbedu_api.deps import get_current_active_user, get_db, get_redis
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_redis, get_current_active_user
 
 	user = _make_user(tier)
 	mock_db = AsyncMock()
@@ -76,8 +75,9 @@ def _build_client(tier: str = "creator"):
 	return client, mock_db, mock_redis, user
 
 
-def teardown_function():
+def teardown_function() -> None:
 	from gbedu_api.main import app
+
 	app.dependency_overrides.clear()
 
 
@@ -93,7 +93,8 @@ _VALID_BODY = {
 
 # ── POST /generations ─────────────────────────────────────────────────────────
 
-def test_submit_generation_success():
+
+def test_submit_generation_success() -> None:
 	client, mock_db, mock_redis, user = _build_client()
 	job = _make_job("job-001", "queued")
 
@@ -108,20 +109,23 @@ def test_submit_generation_success():
 	assert body["status"] == "queued"
 
 
-def test_submit_generation_prompt_too_short_returns_422():
+def test_submit_generation_prompt_too_short_returns_422() -> None:
 	client, _, _, _ = _build_client()
 	resp = client.post("/api/v1/generations", json={**_VALID_BODY, "prompt": "short"})
 	assert resp.status_code == 422
 
 
-def test_submit_generation_missing_required_fields_returns_422():
+def test_submit_generation_missing_required_fields_returns_422() -> None:
 	client, _, _, _ = _build_client()
-	resp = client.post("/api/v1/generations", json={"prompt": "Afrobeat dance track with highlife guitars"})
+	resp = client.post(
+		"/api/v1/generations", json={"prompt": "Afrobeat dance track with highlife guitars"}
+	)
 	assert resp.status_code == 422
 
 
-def test_submit_generation_gbedu_error_returns_http_error():
+def test_submit_generation_gbedu_error_returns_http_error() -> None:
 	from gbedu_core.errors import RateLimitError
+
 	client, _, _, _ = _build_client()
 
 	err = RateLimitError("Rate limit exceeded")
@@ -136,7 +140,8 @@ def test_submit_generation_gbedu_error_returns_http_error():
 
 # ── GET /generations/{job_id} ─────────────────────────────────────────────────
 
-def test_get_generation_status_success():
+
+def test_get_generation_status_success() -> None:
 	client, _, _, _ = _build_client()
 	job = _make_job("job-002", "processing", 40)
 
@@ -152,8 +157,9 @@ def test_get_generation_status_success():
 	assert body["progress_percent"] == 40
 
 
-def test_get_generation_status_not_found_returns_404():
+def test_get_generation_status_not_found_returns_404() -> None:
 	from gbedu_core.errors import NotFoundError
+
 	client, _, _, _ = _build_client()
 
 	err = NotFoundError("job", "nonexistent-job")
@@ -168,7 +174,8 @@ def test_get_generation_status_not_found_returns_404():
 
 # ── DELETE /generations/{job_id} ──────────────────────────────────────────────
 
-def test_cancel_generation_success():
+
+def test_cancel_generation_success() -> None:
 	client, _, _, _ = _build_client()
 
 	with patch("gbedu_api.routers.generations.GenerationService") as MockSvc:
@@ -180,8 +187,9 @@ def test_cancel_generation_success():
 	assert resp.json()["message"] == "Job cancelled successfully"
 
 
-def test_cancel_generation_not_found_returns_error():
+def test_cancel_generation_not_found_returns_error() -> None:
 	from gbedu_core.errors import NotFoundError
+
 	client, _, _, _ = _build_client()
 
 	err = NotFoundError("job", "nonexistent-job")
@@ -194,8 +202,9 @@ def test_cancel_generation_not_found_returns_error():
 	assert resp.status_code == 404
 
 
-def test_cancel_generation_wrong_user_returns_403():
+def test_cancel_generation_wrong_user_returns_403() -> None:
 	from gbedu_core.errors import AuthorizationError
+
 	client, _, _, _ = _build_client()
 
 	err = AuthorizationError("Not your job")
@@ -210,7 +219,8 @@ def test_cancel_generation_wrong_user_returns_403():
 
 # ── GET /generations ──────────────────────────────────────────────────────────
 
-def test_list_generations_returns_paginated():
+
+def test_list_generations_returns_paginated() -> None:
 	client, _, _, _ = _build_client()
 	jobs = [_make_job(f"job-{i}", "completed", 100) for i in range(3)]
 
@@ -227,7 +237,7 @@ def test_list_generations_returns_paginated():
 	assert body["page_size"] == 20
 
 
-def test_list_generations_custom_page_params():
+def test_list_generations_custom_page_params() -> None:
 	client, _, _, _ = _build_client()
 
 	with patch("gbedu_api.routers.generations.GenerationService") as MockSvc:
@@ -241,7 +251,7 @@ def test_list_generations_custom_page_params():
 	assert body["page_size"] == 10
 
 
-def test_list_generations_empty():
+def test_list_generations_empty() -> None:
 	client, _, _, _ = _build_client()
 
 	with patch("gbedu_api.routers.generations.GenerationService") as MockSvc:
@@ -254,7 +264,7 @@ def test_list_generations_empty():
 	assert resp.json()["items"] == []
 
 
-def test_list_generations_invalid_page_clamped():
+def test_list_generations_invalid_page_clamped() -> None:
 	client, _, _, _ = _build_client()
 
 	with patch("gbedu_api.routers.generations.GenerationService") as MockSvc:

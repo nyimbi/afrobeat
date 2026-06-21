@@ -115,9 +115,9 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
-        display: ["var(--font-display)", "Inter", "system-ui", "sans-serif"],
-        mono: ["var(--font-mono)", "JetBrains Mono", "monospace"],
+        sans: ["var(--font-sans)", "Sora", "system-ui", "sans-serif"],
+        display: ["var(--font-display)", "Playfair Display", "serif"],
+        mono: ["var(--font-mono)", "DM Mono", "monospace"],
       },
       borderRadius: {
         lg: "var(--radius)",

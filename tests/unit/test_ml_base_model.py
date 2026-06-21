@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Unit tests for gbedu_ml.models.base.BaseMusGen and helpers."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+
+import pytest
 
 
 def _make_concrete():
@@ -27,14 +27,17 @@ def _make_concrete():
 
 # ── _make_circuit_breaker ─────────────────────────────────────────────────────
 
+
 def test_make_circuit_breaker_returns_cb() -> None:
 	from gbedu_ml.models.base import _make_circuit_breaker
+
 	cb = _make_circuit_breaker("test/model-1")
 	assert cb._failure_threshold == 3
 	assert cb._recovery_timeout == 60
 
 
 # ── BaseMusGen properties ─────────────────────────────────────────────────────
+
 
 def test_model_id_property() -> None:
 	m = _make_concrete()
@@ -53,6 +56,7 @@ def test_circuit_open_false_initially() -> None:
 
 # ── health_check ──────────────────────────────────────────────────────────────
 
+
 def test_health_check_structure() -> None:
 	m = _make_concrete()
 	h = m.health_check()
@@ -66,6 +70,7 @@ def test_health_check_structure() -> None:
 
 def test_health_check_after_load() -> None:
 	import asyncio
+
 	m = _make_concrete()
 	asyncio.get_event_loop().run_until_complete(m.load())
 	h = m.health_check()
@@ -73,6 +78,7 @@ def test_health_check_after_load() -> None:
 
 
 # ── unload ────────────────────────────────────────────────────────────────────
+
 
 async def test_unload_sets_is_loaded_false() -> None:
 	m = _make_concrete()
@@ -83,6 +89,7 @@ async def test_unload_sets_is_loaded_false() -> None:
 
 
 # ── generate_safe ─────────────────────────────────────────────────────────────
+
 
 async def test_generate_safe_success() -> None:
 	m = _make_concrete()
@@ -106,6 +113,7 @@ async def test_generate_safe_assert_zero_duration() -> None:
 
 async def test_generate_safe_circuit_open_raises() -> None:
 	from circuitbreaker import CircuitBreakerError
+
 	m = _make_concrete()
 	# Force circuit open by marking it opened
 	m._cb._failure_count = 10

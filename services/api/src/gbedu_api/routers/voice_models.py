@@ -4,6 +4,10 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from gbedu_core._uuid7 import uuid7str
+from gbedu_core.errors import GbeduError
+from gbedu_core.models.user import SubscriptionTier, User
+from gbedu_core.models.voice import VoiceArchetype, VoiceModel, VoiceModelStatus
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,10 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gbedu_api.config import MAX_UPLOAD_SIZE_BYTES
 from gbedu_api.deps import get_current_active_user, get_db, get_storage, require_tier
 from gbedu_api.services.storage_service import StorageClient
-from gbedu_core._uuid7 import uuid7str
-from gbedu_core.errors import AuthorizationError, GbeduError, NotFoundError
-from gbedu_core.models.user import SubscriptionTier, User
-from gbedu_core.models.voice import VoiceArchetype, VoiceModel, VoiceModelStatus
 
 log = structlog.get_logger(__name__)
 
@@ -30,6 +30,7 @@ _ALLOWED_AUDIO_TYPES = {
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class VoiceModelResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
@@ -72,6 +73,7 @@ def _vm_response(vm: VoiceModel) -> VoiceModelResponse:
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
+
 
 @router.get(
 	"",
@@ -178,6 +180,7 @@ async def upload_voice_sample(
 	# Enqueue RVC training task
 	try:
 		from gbedu_api.worker_tasks import enqueue_voice_training
+
 		enqueue_voice_training(vm.id)
 	except Exception as exc:
 		log.warning("voice_model.enqueue_failed", vm_id=vm.id, error=str(exc))
@@ -215,7 +218,10 @@ async def get_voice_model_status(
 	if not vm.is_preset and vm.user_id != user.id:
 		raise HTTPException(
 			status_code=status.HTTP_403_FORBIDDEN,
-			detail={"error_code": "AUTHORIZATION_ERROR", "message": "You do not own this voice model"},
+			detail={
+				"error_code": "AUTHORIZATION_ERROR",
+				"message": "You do not own this voice model",
+			},
 		)
 
 	return _vm_response(vm)
@@ -255,7 +261,10 @@ async def delete_voice_model(
 	if vm.user_id != user.id:
 		raise HTTPException(
 			status_code=status.HTTP_403_FORBIDDEN,
-			detail={"error_code": "AUTHORIZATION_ERROR", "message": "You do not own this voice model"},
+			detail={
+				"error_code": "AUTHORIZATION_ERROR",
+				"message": "You do not own this voice model",
+			},
 		)
 
 	await vm.delete(db)

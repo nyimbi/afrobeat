@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from circuitbreaker import CircuitBreaker, CircuitBreakerError
@@ -31,7 +31,7 @@ class BaseMusGen(ABC):
 	def __init__(self) -> None:
 		self._is_loaded: bool = False
 		self._load_error: str | None = None
-		self._cb: CircuitBreaker = _make_circuit_breaker(self.model_id)
+		self._cb: Any = _make_circuit_breaker(self.model_id)
 		self._last_generation_ms: float | None = None
 
 	# ── Abstract interface ─────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ class BaseMusGen(ABC):
 				duration_seconds=duration_seconds,
 				elapsed_ms=round(self._last_generation_ms, 1),
 			)
-			return result
+			return cast(Path, result)
 		except CircuitBreakerError:
 			log.warning("model.circuit_open", model=self.model_id)
 			raise

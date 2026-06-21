@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, String
@@ -11,21 +11,22 @@ from gbedu_core._uuid7 import uuid7str
 from gbedu_core.db import Base, SoftDeleteMixin, TimestampMixin
 
 if TYPE_CHECKING:
-	from gbedu_core.models.track import Track
+	from gbedu_core.models.auth import RefreshToken
 	from gbedu_core.models.job import GenerationJob
-	from gbedu_core.models.payment import Subscription, Payment
-	from gbedu_core.models.voice import VoiceModel
 	from gbedu_core.models.marketplace import BeatListing, BeatPurchase
+	from gbedu_core.models.payment import Payment, Subscription
+	from gbedu_core.models.track import Track
+	from gbedu_core.models.voice import VoiceModel
 
 
-class SubscriptionTier(str, enum.Enum):
+class SubscriptionTier(enum.StrEnum):
 	free = "free"
 	creator = "creator"
 	pro = "pro"
 	label = "label"
 
 
-class SubscriptionStatus(str, enum.Enum):
+class SubscriptionStatus(enum.StrEnum):
 	active = "active"
 	past_due = "past_due"
 	cancelled = "cancelled"
@@ -64,42 +65,64 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
 	)
 
 	stripe_customer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-	paystack_customer_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+	paystack_customer_code: Mapped[str | None] = mapped_column(
+		String(64), nullable=True, index=True
+	)
 
 	# OAuth — null for email/password users
 	oauth_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
 	oauth_provider_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
-	is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-	is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+	is_active: Mapped[bool] = mapped_column(
+		Boolean, nullable=False, default=True, server_default="true"
+	)
+	is_verified: Mapped[bool] = mapped_column(
+		Boolean, nullable=False, default=False, server_default="false"
+	)
 
 	preferred_language: Mapped[str] = mapped_column(
 		String(8), nullable=False, default="en", server_default="en"
 	)
 
-	generation_count_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+	generation_count_today: Mapped[int] = mapped_column(
+		Integer, nullable=False, default=0, server_default="0"
+	)
 	generation_count_reset_at: Mapped[datetime] = mapped_column(
 		DateTime(timezone=True),
 		nullable=False,
-		default=lambda: datetime.now(timezone.utc),
+		default=lambda: datetime.now(UTC),
 	)
 
 	# ── Relationships ──────────────────────────────────────────────────────────
 	tracks: Mapped[list[Track]] = relationship("Track", back_populates="user", lazy="noload")
-	jobs: Mapped[list[GenerationJob]] = relationship("GenerationJob", back_populates="user", lazy="noload")
-	subscriptions: Mapped[list[Subscription]] = relationship("Subscription", back_populates="user", lazy="noload")
+	jobs: Mapped[list[GenerationJob]] = relationship(
+		"GenerationJob", back_populates="user", lazy="noload"
+	)
+	subscriptions: Mapped[list[Subscription]] = relationship(
+		"Subscription", back_populates="user", lazy="noload"
+	)
 	payments: Mapped[list[Payment]] = relationship("Payment", back_populates="user", lazy="noload")
-	voice_models: Mapped[list[VoiceModel]] = relationship("VoiceModel", back_populates="user", lazy="noload")
-	beat_listings: Mapped[list[BeatListing]] = relationship("BeatListing", back_populates="seller", lazy="noload")
+	voice_models: Mapped[list[VoiceModel]] = relationship(
+		"VoiceModel", back_populates="user", lazy="noload"
+	)
+	beat_listings: Mapped[list[BeatListing]] = relationship(
+		"BeatListing", back_populates="seller", lazy="noload"
+	)
 	purchases: Mapped[list[BeatPurchase]] = relationship(
 		"BeatPurchase", foreign_keys="BeatPurchase.buyer_id", back_populates="buyer", lazy="noload"
 	)
-	refresh_tokens: Mapped[list["RefreshToken"]] = relationship(  # type: ignore[name-defined]
+	refresh_tokens: Mapped[list[RefreshToken]] = relationship(
 		"RefreshToken", back_populates="user", lazy="noload"
 	)
 
 	__table_args__ = (
-		Index("ix_users_oauth", "oauth_provider", "oauth_provider_id", unique=True, postgresql_where=~(mapped_column("oauth_provider_id") == None)),  # noqa: E711
+		Index(
+			"ix_users_oauth",
+			"oauth_provider",
+			"oauth_provider_id",
+			unique=True,
+			postgresql_where=mapped_column("oauth_provider_id").is_not(None),
+		),
 	)
 
 	@property

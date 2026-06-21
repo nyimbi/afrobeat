@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 from pathlib import Path
 
@@ -10,7 +9,7 @@ import structlog
 from opentelemetry import trace
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from gbedu_audio._base import AudioFile, AudioProcessingError, ProcessingResult
+from gbedu_audio._base import AudioProcessingError
 from gbedu_audio.analysis import AudioAnalyzer
 
 log = structlog.get_logger(__name__)
@@ -19,26 +18,14 @@ _tracer = trace.get_tracer(__name__)
 _analyzer = AudioAnalyzer()
 
 
-def _probe_audio_file(path: Path) -> AudioFile:  # pragma: no cover
-	import soundfile as sf
-
-	info = sf.info(str(path))
-	return AudioFile(
-		path=path,
-		duration_seconds=float(info.duration),
-		sample_rate=int(info.samplerate),
-		channels=int(info.channels),
-		format=info.format,
-		size_bytes=path.stat().st_size,
-	)
-
-
 class AudioConverter:
 	"""Async audio format conversion, loudness normalization, watermarking, and preview clipping."""
 
 	# ── Format conversion ──────────────────────────────────────────────────────
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def to_mp3(self, wav_path: Path, bitrate: str = "320k") -> Path:  # pragma: no cover
 		assert wav_path.is_file(), f"WAV file not found: {wav_path}"
 		out = wav_path.with_suffix(".mp3")
@@ -49,7 +36,13 @@ class AudioConverter:
 			try:
 				loop = asyncio.get_running_loop()
 				await loop.run_in_executor(None, self._to_mp3_sync, wav_path, out, bitrate)
-				log.info("converted to mp3", input=str(wav_path), output=str(out), bitrate=bitrate, elapsed_s=time.perf_counter() - t0)
+				log.info(
+					"converted to mp3",
+					input=str(wav_path),
+					output=str(out),
+					bitrate=bitrate,
+					elapsed_s=time.perf_counter() - t0,
+				)
 				return out
 			except AudioProcessingError:
 				raise
@@ -60,14 +53,15 @@ class AudioConverter:
 		import ffmpeg
 
 		(
-			ffmpeg
-			.input(str(wav_path))
+			ffmpeg.input(str(wav_path))  # type: ignore[reportUnknownMemberType]
 			.output(str(out), audio_bitrate=bitrate, acodec="libmp3lame")
 			.overwrite_output()
 			.run(quiet=True)
 		)
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def to_wav(  # pragma: no cover
 		self,
 		mp3_path: Path,
@@ -83,22 +77,30 @@ class AudioConverter:
 			span.set_attribute("audio.bit_depth", bit_depth)
 			try:
 				loop = asyncio.get_running_loop()
-				await loop.run_in_executor(None, self._to_wav_sync, mp3_path, out, sample_rate, bit_depth)
-				log.info("converted to wav", input=str(mp3_path), output=str(out), elapsed_s=time.perf_counter() - t0)
+				await loop.run_in_executor(
+					None, self._to_wav_sync, mp3_path, out, sample_rate, bit_depth
+				)
+				log.info(
+					"converted to wav",
+					input=str(mp3_path),
+					output=str(out),
+					elapsed_s=time.perf_counter() - t0,
+				)
 				return out
 			except AudioProcessingError:
 				raise
 			except Exception as exc:
 				raise AudioProcessingError(str(exc), stage="to_wav") from exc
 
-	def _to_wav_sync(self, src: Path, out: Path, sample_rate: int, bit_depth: int) -> None:  # pragma: no cover
+	def _to_wav_sync(
+		self, src: Path, out: Path, sample_rate: int, bit_depth: int
+	) -> None:  # pragma: no cover
 		import ffmpeg
 
 		subtype_map = {16: "s16le", 24: "s24le", 32: "s32le"}
 		aformat = subtype_map.get(bit_depth, "s24le")
 		(
-			ffmpeg
-			.input(str(src))
+			ffmpeg.input(str(src))  # type: ignore[reportUnknownMemberType]
 			.output(
 				str(out),
 				ar=sample_rate,
@@ -111,7 +113,9 @@ class AudioConverter:
 
 	# ── Watermarking ───────────────────────────────────────────────────────────
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def add_watermark(self, audio_path: Path, output_path: Path) -> Path:
 		"""Embed a 1 kHz sine tone at -40 dBFS for 100 ms every 30 s."""
 		assert audio_path.is_file(), f"audio file not found: {audio_path}"
@@ -123,7 +127,12 @@ class AudioConverter:
 			try:
 				loop = asyncio.get_running_loop()
 				await loop.run_in_executor(None, self._add_watermark_sync, audio_path, output_path)
-				log.info("watermark added", input=str(audio_path), output=str(output_path), elapsed_s=time.perf_counter() - t0)
+				log.info(
+					"watermark added",
+					input=str(audio_path),
+					output=str(output_path),
+					elapsed_s=time.perf_counter() - t0,
+				)
 				return output_path
 			except AudioProcessingError:  # pragma: no cover
 				raise
@@ -157,7 +166,9 @@ class AudioConverter:
 
 	# ── Loudness normalization ─────────────────────────────────────────────────
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def normalize_loudness(  # pragma: no cover
 		self,
 		audio_path: Path,
@@ -172,21 +183,30 @@ class AudioConverter:
 			span.set_attribute("audio.target_lufs", target_lufs)
 			try:
 				loop = asyncio.get_running_loop()
-				await loop.run_in_executor(None, self._normalize_loudness_sync, audio_path, out, target_lufs)
-				log.info("loudness normalized", input=str(audio_path), output=str(out), target_lufs=target_lufs, elapsed_s=time.perf_counter() - t0)
+				await loop.run_in_executor(
+					None, self._normalize_loudness_sync, audio_path, out, target_lufs
+				)
+				log.info(
+					"loudness normalized",
+					input=str(audio_path),
+					output=str(out),
+					target_lufs=target_lufs,
+					elapsed_s=time.perf_counter() - t0,
+				)
 				return out
 			except AudioProcessingError:
 				raise
 			except Exception as exc:
 				raise AudioProcessingError(str(exc), stage="normalize_loudness") from exc
 
-	def _normalize_loudness_sync(self, audio_path: Path, out: Path, target_lufs: float) -> None:  # pragma: no cover
+	def _normalize_loudness_sync(
+		self, audio_path: Path, out: Path, target_lufs: float
+	) -> None:  # pragma: no cover
 		import ffmpeg
 
 		# ffmpeg loudnorm filter — two-pass would be ideal but one-pass is accurate enough here
 		(
-			ffmpeg
-			.input(str(audio_path))
+			ffmpeg.input(str(audio_path))  # type: ignore[reportUnknownMemberType]
 			.filter("loudnorm", I=target_lufs, TP=-1.5, LRA=11)
 			.output(str(out), acodec="pcm_s24le", format="wav")
 			.overwrite_output()
@@ -195,7 +215,9 @@ class AudioConverter:
 
 	# ── Preview clip ───────────────────────────────────────────────────────────
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def create_preview_clip(  # pragma: no cover
 		self,
 		audio_path: Path,
@@ -214,7 +236,12 @@ class AudioConverter:
 				start_s, end_s = await _analyzer.find_best_clip(audio_path, duration)
 				loop = asyncio.get_running_loop()
 				await loop.run_in_executor(
-					None, self._extract_clip_sync, audio_path, output_path, start_s, end_s,
+					None,
+					self._extract_clip_sync,
+					audio_path,
+					output_path,
+					start_s,
+					end_s,
 				)
 				log.info(
 					"preview clip created",
@@ -241,8 +268,7 @@ class AudioConverter:
 
 		clip_duration = end_s - start_s
 		(
-			ffmpeg
-			.input(str(audio_path), ss=start_s, t=clip_duration)
+			ffmpeg.input(str(audio_path), ss=start_s, t=clip_duration)  # type: ignore[reportUnknownMemberType]
 			.output(str(output_path), acodec="libmp3lame", audio_bitrate="320k")
 			.overwrite_output()
 			.run(quiet=True)

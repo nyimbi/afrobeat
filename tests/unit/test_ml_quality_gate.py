@@ -7,10 +7,12 @@ import pytest
 
 def _gate():
 	from gbedu_ml.language.quality_gate import PidginYorubaQualityGate
+
 	return PidginYorubaQualityGate()
 
 
 # ── check_pidgin ──────────────────────────────────────────────────────────
+
 
 def test_check_pidgin_passes_authentic_text() -> None:
 	gate = _gate()
@@ -56,12 +58,10 @@ def test_check_pidgin_rejects_short_text() -> None:
 
 # ── check_yoruba ──────────────────────────────────────────────────────────
 
+
 def test_check_yoruba_with_diacritics_passes() -> None:
 	gate = _gate()
-	text = (
-		"Ẹni tó bá fẹ́ràn ọmọ rẹ̀ á jẹ kó máa fi ọwọ́ rẹ̀ ṣiṣẹ́. "
-		"Ọmọ wẹrẹ ní ọwọ́ ọlọ́pàá."
-	)
+	text = "Ẹni tó bá fẹ́ràn ọmọ rẹ̀ á jẹ kó máa fi ọwọ́ rẹ̀ ṣiṣẹ́. Ọmọ wẹrẹ ní ọwọ́ ọlọ́pàá."
 	result = gate.check_yoruba(text)
 	assert result.passed, f"Expected pass; confidence={result.confidence}"
 
@@ -84,6 +84,7 @@ def test_check_yoruba_result_structure() -> None:
 
 # ── check_swahili ─────────────────────────────────────────────────────────
 
+
 def test_check_swahili_with_markers_passes() -> None:
 	gate = _gate()
 	text = (
@@ -105,6 +106,7 @@ def test_check_swahili_result_structure() -> None:
 
 # ── check_lingala ─────────────────────────────────────────────────────────
 
+
 def test_check_lingala_result_structure() -> None:
 	gate = _gate()
 	text = "Nalingi yo mingi. Tokende na biso. Ozali malamu."
@@ -120,6 +122,7 @@ def test_check_lingala_plain_english_result() -> None:
 
 
 # ── check_zulu ────────────────────────────────────────────────────────────
+
 
 def test_check_zulu_result_structure() -> None:
 	gate = _gate()
@@ -137,6 +140,7 @@ def test_check_zulu_plain_english_result() -> None:
 
 # ── check_igbo ────────────────────────────────────────────────────────────
 
+
 def test_check_igbo_result_structure() -> None:
 	gate = _gate()
 	text = "Ọ dị mma. Anyị na-eje ụgbọ elu. Nna m nọ n'ụlọ."
@@ -152,6 +156,7 @@ def test_check_igbo_plain_text_result() -> None:
 
 
 # ── check_twi ─────────────────────────────────────────────────────────────
+
 
 def test_check_twi_result_structure() -> None:
 	gate = _gate()
@@ -169,10 +174,13 @@ def test_check_twi_plain_text_result() -> None:
 
 # ── QualityGateResult model ────────────────────────────────────────────────
 
+
 def test_quality_gate_result_model() -> None:
 	from gbedu_ml.language.quality_gate import QualityGateResult
 
-	r = QualityGateResult(passed=True, confidence=0.85, reason="3 markers/100 words", marker_rate=3.0)
+	r = QualityGateResult(
+		passed=True, confidence=0.85, reason="3 markers/100 words", marker_rate=3.0
+	)
 	assert r.passed
 	assert r.confidence == 0.85
 	assert r.reason

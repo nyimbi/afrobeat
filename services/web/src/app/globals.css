@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400;1,700&family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Sora:wght@300;400;500;600;700&display=swap');
-
 @layer base {
 	:root {
 		--background: 240 10% 4%;
@@ -35,10 +33,6 @@
 		--ring: 43 65% 52%;
 
 		--radius: 0.625rem;
-
-		--font-display: 'Playfair Display', serif;
-		--font-sans: 'Sora', system-ui, sans-serif;
-		--font-mono: 'DM Mono', monospace;
 	}
 }
 

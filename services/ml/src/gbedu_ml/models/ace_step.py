@@ -1,26 +1,31 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 import torch
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from gbedu_ml.config import settings
 from gbedu_ml.models.base import BaseMusGen
 
 log = structlog.get_logger(__name__)
 
-_LOAD_RETRY_KWARGS = dict(
-	stop=stop_after_attempt(3),
-	wait=wait_exponential(multiplier=1, min=2, max=10),
-	retry=retry_if_exception_type((OSError, RuntimeError)),
-	reraise=True,
-)
+_LOAD_RETRY_KWARGS = {
+	"stop": stop_after_attempt(3),
+	"wait": wait_exponential(multiplier=1, min=2, max=10),
+	"retry": retry_if_exception_type((OSError, RuntimeError)),
+	"reraise": True,
+}
+
+
+def _load_retry[F: Callable[..., Any]](func: F) -> F:
+	retry_factory = cast(Any, retry)
+	return cast(F, retry_factory(**_LOAD_RETRY_KWARGS)(func))
 
 
 class AceStepModel(BaseMusGen):
@@ -39,7 +44,7 @@ class AceStepModel(BaseMusGen):
 	def model_id(self) -> str:
 		return settings.ACE_STEP_MODEL_ID
 
-	@retry(**_LOAD_RETRY_KWARGS)
+	@_load_retry
 	async def load(self) -> None:  # pragma: no cover
 		loop = asyncio.get_event_loop()
 		await loop.run_in_executor(None, self._load_sync)
@@ -47,16 +52,15 @@ class AceStepModel(BaseMusGen):
 	def _load_sync(self) -> None:  # pragma: no cover
 		# Import deferred — torch/transformers not available at import time in tests
 		try:
-			from acestep.pipeline import ACEStepPipeline  # type: ignore[import]
+			from acestep.pipeline import ACEStepPipeline as pipeline_cls  # type: ignore[import]
 		except ImportError:
 			# Fallback: try loading via diffusers-style pipeline if ACE-Step
 			# doesn't ship its own entry-point
-			from diffusers import DiffusionPipeline  # type: ignore[import]
-			ACEStepPipeline = DiffusionPipeline
+			from diffusers import DiffusionPipeline as pipeline_cls  # type: ignore[import]
 
 		log.info("ace_step.load.start", model=self.model_id, device=self._device)
 
-		self._pipeline = ACEStepPipeline.from_pretrained(
+		self._pipeline = cast(Any, pipeline_cls).from_pretrained(
 			self.model_id,
 			cache_dir=str(settings.MODEL_CACHE_DIR),
 			torch_dtype=torch.float16 if "cuda" in self._device else torch.float32,
@@ -78,15 +82,21 @@ class AceStepModel(BaseMusGen):
 		self._is_loaded = True
 		log.info("ace_step.load.done", model=self.model_id)
 
-	async def generate(self, prompt: str, duration_seconds: int, **kwargs: Any) -> Path:  # pragma: no cover
+	async def generate(
+		self, prompt: str, duration_seconds: int, **kwargs: Any
+	) -> Path:  # pragma: no cover
 		assert self._pipeline is not None, "model not loaded — call load() first"
 		assert prompt, "prompt must not be empty"
 		assert duration_seconds > 0, "duration_seconds must be positive"
 
 		loop = asyncio.get_event_loop()
-		return await loop.run_in_executor(None, self._generate_sync, prompt, duration_seconds, kwargs)
+		return await loop.run_in_executor(
+			None, self._generate_sync, prompt, duration_seconds, kwargs
+		)
 
-	def _generate_sync(self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]) -> Path:  # pragma: no cover
+	def _generate_sync(
+		self, prompt: str, duration_seconds: int, kwargs: dict[str, Any]
+	) -> Path:  # pragma: no cover
 		out_path = settings.OUTPUT_DIR / f"ace_{uuid.uuid4().hex}.wav"
 
 		try:
@@ -134,7 +144,7 @@ class AceStepModel(BaseMusGen):
 			audio = audio[0]
 
 		sample_rate = getattr(result, "sample_rate", 44100)
-		torchaudio.save(str(out_path), audio.cpu(), sample_rate)
+		cast(Any, torchaudio).save(str(out_path), audio.cpu(), sample_rate)
 
 		torch.cuda.empty_cache()
 		log.info("ace_step.generated", path=str(out_path), sample_rate=sample_rate)

@@ -2,23 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal, cast
 
-import httpx
 import structlog
-from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict
-
-from gbedu_api.config import API_VERSION, get_settings
-from gbedu_api.deps import get_ml_client, get_redis
-
+from fastapi import APIRouter, Depends, Response, status
 from prometheus_client import (
 	CONTENT_TYPE_LATEST,
 	REGISTRY,
 	Gauge,
 	generate_latest,
 )
+from pydantic import BaseModel, ConfigDict
+from redis.asyncio import Redis
+
+from gbedu_api.config import API_VERSION, get_settings
+from gbedu_api.deps import get_ml_client, get_redis
+from gbedu_api.services.ml_client import MLServiceClient
 
 log = structlog.get_logger(__name__)
 
@@ -107,7 +107,7 @@ async def health() -> HealthResponse:
 		status="ok",
 		service="gbedu-api",
 		version=API_VERSION,
-		timestamp=datetime.now(timezone.utc).isoformat(),
+		timestamp=datetime.now(UTC).isoformat(),
 	)
 
 
@@ -118,8 +118,8 @@ async def health() -> HealthResponse:
 	summary="Readiness check — verifies DB, Redis, ML service",
 )
 async def ready(
-	redis=Depends(get_redis),
-	ml_client=Depends(get_ml_client),
+	redis: Annotated[Redis, Depends(get_redis)],
+	ml_client: Annotated[MLServiceClient, Depends(get_ml_client)],
 ) -> ReadinessCheck:
 	from fastapi import HTTPException
 
@@ -128,12 +128,16 @@ async def ready(
 
 	# Database — reuse the already-initialised engine from the lifespan
 	try:
-		from gbedu_core.db import _session_factory
-		if _session_factory is None:
+		from gbedu_core.db import get_current_session_factory
+
+		session_factory = get_current_session_factory()
+		if session_factory is None:
 			raise RuntimeError("session factory not initialised")
 		from sqlalchemy import text
-		async with _session_factory() as session:
+
+		async with session_factory() as session:
 			import time
+
 			t0 = time.perf_counter()
 			await session.execute(text("SELECT 1"))
 			latency_ms = (time.perf_counter() - t0) * 1000
@@ -144,7 +148,7 @@ async def ready(
 
 	# Redis
 	try:
-		await redis.ping()
+		await cast(Any, redis).ping()
 		checks["redis"] = "ok"
 	except Exception as exc:
 		checks["redis"] = f"error: {exc}"
@@ -163,7 +167,7 @@ async def ready(
 	resp = ReadinessCheck(
 		status="ok" if all_ok else "degraded",
 		checks=checks,
-		timestamp=datetime.now(timezone.utc).isoformat(),
+		timestamp=datetime.now(UTC).isoformat(),
 	)
 
 	if not all_ok:
@@ -177,14 +181,17 @@ async def ready(
 
 # ── Detailed health endpoint ───────────────────────────────────────────────────
 
+
 def _update_prometheus_gauges(redis_url: str) -> None:
 	"""Refresh all Prometheus gauges synchronously — called from the /metrics handler."""
 	# GPU memory
 	try:
 		import torch
-		if torch.cuda.is_available():
-			reserved = torch.cuda.memory_reserved(0)
-			total = torch.cuda.get_device_properties(0).total_memory
+
+		cuda = cast(Any, torch.cuda)
+		if cuda.is_available():
+			reserved = int(cuda.memory_reserved(0))
+			total = int(cuda.get_device_properties(0).total_memory)
 			_gauge_gpu_memory_reserved.set(reserved)
 			_gauge_gpu_memory_total.set(total)
 		else:
@@ -195,9 +202,11 @@ def _update_prometheus_gauges(redis_url: str) -> None:
 
 	# DB pool
 	try:
-		from gbedu_core.db import _engine, get_pool_status
-		if _engine is not None:
-			stats = get_pool_status(_engine)
+		from gbedu_core.db import get_current_engine, get_pool_status
+
+		engine = get_current_engine()
+		if engine is not None:
+			stats = get_pool_status(engine)
 			_gauge_db_pool_checkedout.set(stats["checked_out"])
 			_gauge_db_pool_size.set(stats["pool_size"])
 	except Exception:
@@ -206,10 +215,12 @@ def _update_prometheus_gauges(redis_url: str) -> None:
 	# Celery queue lengths (synchronous Redis LLEN)
 	try:
 		import redis as sync_redis
-		r = sync_redis.from_url(redis_url, socket_connect_timeout=1)
+
+		sync_redis_any = cast(Any, sync_redis)
+		r = sync_redis_any.from_url(redis_url, socket_connect_timeout=1)
 		for q in ("default", "generation", "low"):
 			try:
-				length = r.llen(q)
+				length = int(r.llen(q))
 				_gauge_celery_queue_length.labels(queue=q).set(length)
 			except Exception:
 				pass
@@ -221,22 +232,17 @@ def _update_prometheus_gauges(redis_url: str) -> None:
 @router.get(
 	"/metrics",
 	summary="Prometheus metrics scrape endpoint",
-	response_class=None,
 	include_in_schema=False,
 )
-async def prometheus_metrics() -> "Response":
+async def prometheus_metrics() -> Response:
 	"""Expose Prometheus-format metrics for Grafana/alertmanager scraping.
 
 	Gauges are updated on each scrape (pull model) — no background thread needed.
 	"""
-	from fastapi import Response as FastAPIResponse
-
 	settings = get_settings()
 	loop = asyncio.get_event_loop()
-	await loop.run_in_executor(
-		None, _update_prometheus_gauges, settings.redis.url
-	)
-	return FastAPIResponse(
+	await loop.run_in_executor(None, _update_prometheus_gauges, settings.redis.url)
+	return Response(
 		content=generate_latest(REGISTRY),
 		media_type=CONTENT_TYPE_LATEST,
 	)
@@ -245,10 +251,12 @@ async def prometheus_metrics() -> "Response":
 def _check_db_pool() -> ComponentHealth:
 	"""Read pool statistics synchronously — no I/O, safe to call anywhere."""
 	try:
-		from gbedu_core.db import _engine, get_pool_status
-		if _engine is None:
+		from gbedu_core.db import get_current_engine, get_pool_status
+
+		engine = get_current_engine()
+		if engine is None:
 			return ComponentHealth(status="down", detail="engine not initialised")
-		stats = get_pool_status(_engine)
+		stats = get_pool_status(engine)
 		utilization = stats["checked_out"] / max(stats["pool_size"], 1)
 		status: ComponentStatus = "ok"
 		if utilization >= 0.9:
@@ -266,15 +274,16 @@ def _check_db_pool() -> ComponentHealth:
 async def _check_database() -> ComponentHealth:
 	"""Probe the DB with SELECT 1, timeout after _COMPONENT_TIMEOUT seconds."""
 	try:
-		from gbedu_core.db import _session_factory
+		from gbedu_core.db import get_current_session_factory
 		from sqlalchemy import text
 
-		if _session_factory is None:
+		session_factory = get_current_session_factory()
+		if session_factory is None:
 			return ComponentHealth(status="down", detail="session factory not initialised")
 
 		t0 = time.perf_counter()
 		async with asyncio.timeout(_COMPONENT_TIMEOUT):
-			async with _session_factory() as session:
+			async with session_factory() as session:
 				await session.execute(text("SELECT 1"))
 		latency_ms = (time.perf_counter() - t0) * 1000
 		return ComponentHealth(status="ok", latency_ms=round(latency_ms, 2))
@@ -284,12 +293,12 @@ async def _check_database() -> ComponentHealth:
 		return ComponentHealth(status="down", detail=str(exc))
 
 
-async def _check_redis(redis) -> ComponentHealth:
+async def _check_redis(redis: Redis) -> ComponentHealth:
 	"""Ping Redis, timeout after _COMPONENT_TIMEOUT seconds."""
 	try:
 		t0 = time.perf_counter()
 		async with asyncio.timeout(_COMPONENT_TIMEOUT):
-			await redis.ping()
+			await cast(Any, redis).ping()
 		latency_ms = (time.perf_counter() - t0) * 1000
 		return ComponentHealth(status="ok", latency_ms=round(latency_ms, 2))
 	except TimeoutError:
@@ -298,7 +307,7 @@ async def _check_redis(redis) -> ComponentHealth:
 		return ComponentHealth(status="down", detail=str(exc))
 
 
-async def _check_ml_service(ml_client) -> ComponentHealth:
+async def _check_ml_service(ml_client: MLServiceClient) -> ComponentHealth:
 	"""GET /health on the ML service with a 2 s timeout.
 
 	ML is non-critical: generation pipeline falls back to queuing when ML is
@@ -311,9 +320,13 @@ async def _check_ml_service(ml_client) -> ComponentHealth:
 		latency_ms = (time.perf_counter() - t0) * 1000
 		if healthy:
 			return ComponentHealth(status="ok", latency_ms=round(latency_ms, 2))
-		return ComponentHealth(status="degraded", latency_ms=round(latency_ms, 2), detail="unhealthy response")
+		return ComponentHealth(
+			status="degraded", latency_ms=round(latency_ms, 2), detail="unhealthy response"
+		)
 	except TimeoutError:
-		return ComponentHealth(status="degraded", detail="timed out — marked degraded, not critical")
+		return ComponentHealth(
+			status="degraded", detail="timed out — marked degraded, not critical"
+		)
 	except Exception as exc:
 		return ComponentHealth(status="degraded", detail=str(exc))
 
@@ -326,6 +339,7 @@ async def _check_storage() -> ComponentHealth:
 	"""
 	try:
 		from gbedu_api.deps import get_storage
+
 		_ = await get_storage()
 		return ComponentHealth(status="ok")
 	except Exception as exc:
@@ -338,8 +352,8 @@ async def _check_storage() -> ComponentHealth:
 	summary="Detailed health — per-component status with graceful degradation",
 )
 async def detailed_health(
-	redis=Depends(get_redis),
-	ml_client=Depends(get_ml_client),
+	redis: Annotated[Redis, Depends(get_redis)],
+	ml_client: Annotated[MLServiceClient, Depends(get_ml_client)],
 ) -> DetailedHealthResponse:
 	"""Return a per-component health snapshot.
 
@@ -411,5 +425,5 @@ async def detailed_health(
 		components=components,
 		degraded_features=degraded_features,
 		critical_features=critical_features,
-		timestamp=datetime.now(timezone.utc).isoformat(),
+		timestamp=datetime.now(UTC).isoformat(),
 	)

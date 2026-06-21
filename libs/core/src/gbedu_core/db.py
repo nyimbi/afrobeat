@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import DateTime, MetaData, func, text
@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from gbedu_core.config import DatabaseSettings
+if TYPE_CHECKING:
+	from gbedu_core.config import DatabaseSettings
 
 log = structlog.get_logger(__name__)
 
@@ -56,11 +57,13 @@ def get_engine(settings: DatabaseSettings) -> AsyncEngine:
 
 def _json_serializer(obj: Any) -> str:
 	import json
+
 	return json.dumps(obj, default=str)
 
 
 def _json_deserializer(s: str) -> Any:
 	import json
+
 	return json.loads(s)
 
 
@@ -97,7 +100,9 @@ class TimestampMixin:
 class SoftDeleteMixin:
 	"""Non-destructive logical deletion via deleted_at timestamp."""
 
-	deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+	deleted_at: Mapped[datetime | None] = mapped_column(
+		DateTime(timezone=True), nullable=True, default=None
+	)
 
 	@property
 	def is_deleted(self) -> bool:
@@ -105,9 +110,10 @@ class SoftDeleteMixin:
 
 	async def delete(self, session: AsyncSession) -> None:
 		"""Mark this record deleted without removing it from the database."""
-		from datetime import datetime, timezone
+		from datetime import datetime
+
 		assert not self.is_deleted, "record is already deleted"
-		self.deleted_at = datetime.now(timezone.utc)
+		self.deleted_at = datetime.now(UTC)
 		session.add(self)
 		await session.flush()
 
@@ -123,6 +129,14 @@ def init_db(engine: AsyncEngine) -> None:
 	global _session_factory, _engine
 	_engine = engine
 	_session_factory = make_session_factory(engine)
+
+
+def get_current_engine() -> AsyncEngine | None:
+	return _engine
+
+
+def get_current_session_factory() -> async_sessionmaker[AsyncSession] | None:
+	return _session_factory
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -155,7 +169,7 @@ async def ping_database(engine: AsyncEngine) -> float:
 
 def get_pool_status(engine: AsyncEngine) -> dict[str, int]:
 	"""Return current connection pool statistics (synchronous — no I/O)."""
-	pool = engine.sync_engine.pool
+	pool: Any = engine.sync_engine.pool
 	return {
 		"pool_size": pool.size(),
 		"checked_in": pool.checkedin(),

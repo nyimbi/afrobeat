@@ -1,26 +1,28 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Annotated
+from functools import cache
+from typing import Annotated
 
 import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from gbedu_core.config import get_settings
+from gbedu_core.db import get_db as _core_get_db
+from gbedu_core.errors import (
+	TokenExpiredError,
+	TokenInvalidError,
+)
+from gbedu_core.models.user import SubscriptionTier, User
+from gbedu_core.security import verify_access_token
 from redis.asyncio import Redis
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gbedu_core.config import get_settings
-from gbedu_core.db import get_db as _core_get_db
-from gbedu_core.errors import AuthenticationError, AuthorizationError, TokenExpiredError, TokenInvalidError
-from gbedu_core.models.user import SubscriptionTier, User
-from gbedu_core.security import verify_access_token
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-if TYPE_CHECKING:  # pragma: no cover
-	from gbedu_api.services.storage_service import StorageClient
-	from gbedu_api.services.ml_client import MLServiceClient
+from gbedu_api.services.ml_client import MLServiceClient
+from gbedu_api.services.storage_service import StorageClient
 
 log = structlog.get_logger(__name__)
 
@@ -35,8 +37,8 @@ _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=
 # ── Module-level singletons initialised at startup ────────────────────────────
 
 _redis: Redis | None = None
-_storage_client: "StorageClient | None" = None
-_ml_client: "MLServiceClient | None" = None
+_storage_client: StorageClient | None = None
+_ml_client: MLServiceClient | None = None
 
 
 def set_redis(r: Redis) -> None:
@@ -44,17 +46,18 @@ def set_redis(r: Redis) -> None:
 	_redis = r
 
 
-def set_storage_client(c: "StorageClient") -> None:
+def set_storage_client(c: StorageClient) -> None:
 	global _storage_client
 	_storage_client = c
 
 
-def set_ml_client(c: "MLServiceClient") -> None:
+def set_ml_client(c: MLServiceClient) -> None:
 	global _ml_client
 	_ml_client = c
 
 
 # ── Database ───────────────────────────────────────────────────────────────────
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:  # pragma: no cover
 	async for session in _core_get_db():
@@ -63,6 +66,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:  # pragma: no cover
 
 # ── Redis ──────────────────────────────────────────────────────────────────────
 
+
 async def get_redis() -> Redis:
 	assert _redis is not None, "Redis not initialised — call set_redis() at startup"
 	return _redis
@@ -70,19 +74,22 @@ async def get_redis() -> Redis:
 
 # ── Storage ────────────────────────────────────────────────────────────────────
 
-async def get_storage() -> "StorageClient":
+
+async def get_storage() -> StorageClient:
 	assert _storage_client is not None, "StorageClient not initialised"
 	return _storage_client
 
 
 # ── ML client ─────────────────────────────────────────────────────────────────
 
-async def get_ml_client() -> "MLServiceClient":
+
+async def get_ml_client() -> MLServiceClient:
 	assert _ml_client is not None, "MLServiceClient not initialised"
 	return _ml_client
 
 
 # ── Auth dependencies ──────────────────────────────────────────────────────────
+
 
 async def get_current_user(
 	token: Annotated[str | None, Depends(_oauth2_scheme)],
@@ -147,6 +154,7 @@ async def get_current_active_user(
 	return user
 
 
+@cache
 def require_tier(min_tier: SubscriptionTier):
 	"""Factory returning a FastAPI dependency that enforces a minimum subscription tier.
 
@@ -177,5 +185,3 @@ def require_tier(min_tier: SubscriptionTier):
 		return user
 
 	return _check
-
-

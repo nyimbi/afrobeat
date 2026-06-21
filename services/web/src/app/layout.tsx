@@ -1,6 +1,30 @@
-import type { Metadata, Viewport } from "next"
+import type { Metadata, Viewport } from "next/types"
+import { DM_Mono, Playfair_Display, Sora } from "next/font/google"
 import "./globals.css"
 import { Providers } from "./providers"
+
+const sora = Sora({
+	subsets: ["latin"],
+	weight: ["300", "400", "500", "600", "700"],
+	variable: "--font-sans",
+	display: "swap",
+})
+
+const playfair = Playfair_Display({
+	subsets: ["latin"],
+	weight: ["400", "600", "700", "900"],
+	style: ["normal", "italic"],
+	variable: "--font-display",
+	display: "swap",
+})
+
+const dmMono = DM_Mono({
+	subsets: ["latin"],
+	weight: ["400", "500"],
+	style: ["normal", "italic"],
+	variable: "--font-mono",
+	display: "swap",
+})
 
 export const metadata: Metadata = {
 	title: {
@@ -75,19 +99,11 @@ export default function RootLayout({
 	children: React.ReactNode
 }) {
 	return (
-		<html lang="en" className="dark" suppressHydrationWarning>
-			<head>
-				<link rel="preconnect" href="https://fonts.googleapis.com" />
-				<link
-					rel="preconnect"
-					href="https://fonts.gstatic.com"
-					crossOrigin="anonymous"
-				/>
-				<link
-					href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400;1,700&family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Sora:wght@300;400;500;600;700&display=swap"
-					rel="stylesheet"
-				/>
-			</head>
+		<html
+			lang="en"
+			className={`dark ${sora.variable} ${playfair.variable} ${dmMono.variable}`}
+			suppressHydrationWarning
+		>
 			<body className="grain-overlay min-h-dvh bg-dark-bg-primary antialiased">
 				<Providers>{children}</Providers>
 			</body>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from gbedu_core.config import Settings, get_settings as _get_settings
+from gbedu_core.config import Settings
+from gbedu_core.config import get_settings as _get_settings
 
 # Re-export everything from core — API-specific overrides are additive
 __all__ = ["Settings", "get_settings", "API_VERSION"]
@@ -19,10 +20,10 @@ RATE_LIMIT_LABEL = "100000/day"
 # Login: moderate sliding window (brute-force protection without locking out CDN IPs)
 # Refresh: generous (tokens expire naturally; clients need headroom)
 # Logout: unlimited (always safe to log out)
-RATE_LIMIT_REGISTER    = "3/hour"   # tightened per FMEA S05
-RATE_LIMIT_LOGIN       = "20/minute"
-RATE_LIMIT_REFRESH     = "120/minute"
-RATE_LIMIT_AUTH        = "20/minute"   # generic fallback for other auth endpoints
+RATE_LIMIT_REGISTER = "3/hour"  # tightened per FMEA S05
+RATE_LIMIT_LOGIN = "20/minute"
+RATE_LIMIT_REFRESH = "120/minute"
+RATE_LIMIT_AUTH = "20/minute"  # generic fallback for other auth endpoints
 
 MAX_UPLOAD_SIZE_MB = 10
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024

@@ -10,11 +10,12 @@ Strategy:
   that arise from Model.__new__() in isolated unit tests without a DB session.
 - No @pytest.mark.asyncio — asyncio_mode = "auto" is set project-wide.
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 from starlette.testclient import TestClient
 
@@ -24,12 +25,14 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("GBEDU_ML_API_KEY", "test-ml-internal-api-key")
 
-from gbedu_core.models.user import SubscriptionTier, SubscriptionStatus
-from gbedu_core.models.track import SubGenre, Language, TrackStatus
-from gbedu_core.models.marketplace import LicenseType, ListingStatus
+from typing import Never
 
+from gbedu_core.models.marketplace import LicenseType, ListingStatus
+from gbedu_core.models.track import Language, SubGenre, TrackStatus
+from gbedu_core.models.user import SubscriptionStatus, SubscriptionTier
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _make_user(tier: str = "pro", user_id: str = "user-test-001") -> MagicMock:
 	user = MagicMock()
@@ -65,7 +68,7 @@ def _make_track(user_id: str = "user-test-001") -> MagicMock:
 	track.play_count = 0
 	track.share_count = 0
 	track.deleted_at = None
-	track.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+	track.created_at = datetime(2025, 1, 1, tzinfo=UTC)
 	return track
 
 
@@ -92,7 +95,7 @@ def _make_listing(
 	listing.preview_url = "https://cdn.example.com/track-wm.mp3"
 	# Use a real datetime so isoformat() returns a string; the router calls
 	# listing.created_at.isoformat() and Pydantic expects a str, not a MagicMock.
-	listing.created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+	listing.created_at = datetime(2025, 1, 1, tzinfo=UTC)
 	listing.created_at = MagicMock()
 	listing.created_at.isoformat.return_value = "2025-01-01T00:00:00+00:00"
 	listing.deleted_at = None
@@ -118,8 +121,8 @@ def _make_purchase(buyer_id: str = "buyer-001", listing_id: str = "listing-test-
 
 
 def _build_client(tier: str = "pro", user_id: str = "user-test-001"):
+	from gbedu_api.deps import get_current_active_user, get_db
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user
 
 	user = _make_user(tier, user_id)
 	mock_db = AsyncMock()
@@ -134,16 +137,18 @@ def _build_client(tier: str = "pro", user_id: str = "user-test-001"):
 	return client, mock_db, user
 
 
-def teardown_function():
+def teardown_function() -> None:
 	from gbedu_api.main import app
+
 	app.dependency_overrides.clear()
 
 
 # ── GET /marketplace/beats ─────────────────────────────────────────────────────
 
-def test_browse_beats_returns_paginated_listings():
-	from gbedu_api.main import app
+
+def test_browse_beats_returns_paginated_listings() -> None:
 	from gbedu_api.deps import get_db
+	from gbedu_api.main import app
 
 	mock_db = AsyncMock()
 	listing = _make_listing()
@@ -170,9 +175,9 @@ def test_browse_beats_returns_paginated_listings():
 	assert body["items"][0]["id"] == "listing-test-001"
 
 
-def test_browse_beats_empty_marketplace():
-	from gbedu_api.main import app
+def test_browse_beats_empty_marketplace() -> None:
 	from gbedu_api.deps import get_db
+	from gbedu_api.main import app
 
 	mock_db = AsyncMock()
 	count_result = MagicMock()
@@ -196,9 +201,10 @@ def test_browse_beats_empty_marketplace():
 
 # ── GET /marketplace/beats/{beat_id} ──────────────────────────────────────────
 
-def test_get_beat_found_increments_view_count():
-	from gbedu_api.main import app
+
+def test_get_beat_found_increments_view_count() -> None:
 	from gbedu_api.deps import get_db
+	from gbedu_api.main import app
 
 	mock_db = AsyncMock()
 	mock_db.add = MagicMock()
@@ -225,9 +231,9 @@ def test_get_beat_found_increments_view_count():
 	assert listing.view_count == 4
 
 
-def test_get_beat_not_found_returns_404():
-	from gbedu_api.main import app
+def test_get_beat_not_found_returns_404() -> None:
 	from gbedu_api.deps import get_db
+	from gbedu_api.main import app
 
 	mock_db = AsyncMock()
 	result = MagicMock()
@@ -247,14 +253,15 @@ def test_get_beat_not_found_returns_404():
 
 # ── POST /marketplace/beats (create listing) ───────────────────────────────────
 
-def test_create_listing_pro_tier_rejects_missing_track():
+
+def test_create_listing_pro_tier_rejects_missing_track() -> None:
 	"""create_listing returns 404 when the track doesn't exist or isn't owned.
 
 	This covers the full guard path without hitting BeatListing() construction,
 	which requires a live SQLAlchemy session to configure mapper state.
 	"""
+	from gbedu_api.deps import get_current_active_user, get_db, require_tier
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, require_tier
 
 	user = _make_user(tier="pro")
 	mock_db = AsyncMock()
@@ -273,21 +280,24 @@ def test_create_listing_pro_tier_rejects_missing_track():
 	app.dependency_overrides[_tier_dep] = lambda: user
 
 	client = TestClient(app, raise_server_exceptions=False)
-	resp = client.post("/api/v1/marketplace/beats", json={
-		"track_id": "nonexistent-track",
-		"title": "Ghost Beat",
-		"price_minor": 500,
-	})
+	resp = client.post(
+		"/api/v1/marketplace/beats",
+		json={
+			"track_id": "nonexistent-track",
+			"title": "Ghost Beat",
+			"price_minor": 500,
+		},
+	)
 
 	assert resp.status_code == 404
 	assert resp.json()["detail"]["error_code"] == "NOT_FOUND"
 
 
-def test_create_listing_pro_tier_rejects_free_user():
+def test_create_listing_pro_tier_rejects_free_user() -> None:
 	"""create_listing requires Pro tier — free user gets 403."""
-	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, require_tier
 	from fastapi import HTTPException, status
+	from gbedu_api.deps import get_current_active_user, get_db, require_tier
+	from gbedu_api.main import app
 
 	user = _make_user(tier="free")
 	mock_db = AsyncMock()
@@ -296,7 +306,7 @@ def test_create_listing_pro_tier_rejects_free_user():
 	async def _override_db():
 		yield mock_db
 
-	def _deny():
+	def _deny() -> Never:
 		raise HTTPException(
 			status_code=status.HTTP_403_FORBIDDEN,
 			detail={
@@ -310,18 +320,21 @@ def test_create_listing_pro_tier_rejects_free_user():
 	app.dependency_overrides[_tier_dep] = _deny
 
 	client = TestClient(app, raise_server_exceptions=False)
-	resp = client.post("/api/v1/marketplace/beats", json={
-		"track_id": "track-test-001",
-		"title": "Beat",
-		"price_minor": 500,
-	})
+	resp = client.post(
+		"/api/v1/marketplace/beats",
+		json={
+			"track_id": "track-test-001",
+			"title": "Beat",
+			"price_minor": 500,
+		},
+	)
 
 	assert resp.status_code == 403
 
 
-def test_create_listing_track_not_found_returns_404():
+def test_create_listing_track_not_found_returns_404() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, require_tier
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, require_tier
 
 	user = _make_user(tier="pro")
 	mock_db = AsyncMock()
@@ -339,18 +352,21 @@ def test_create_listing_track_not_found_returns_404():
 	app.dependency_overrides[_tier_dep] = lambda: user
 
 	client = TestClient(app, raise_server_exceptions=False)
-	resp = client.post("/api/v1/marketplace/beats", json={
-		"track_id": "nonexistent-track",
-		"title": "Ghost Track",
-		"price_minor": 500,
-	})
+	resp = client.post(
+		"/api/v1/marketplace/beats",
+		json={
+			"track_id": "nonexistent-track",
+			"title": "Ghost Track",
+			"price_minor": 500,
+		},
+	)
 
 	assert resp.status_code == 404
 
 
-def test_create_listing_duplicate_returns_409():
+def test_create_listing_duplicate_returns_409() -> None:
+	from gbedu_api.deps import get_current_active_user, get_db, require_tier
 	from gbedu_api.main import app
-	from gbedu_api.deps import get_db, get_current_active_user, require_tier
 
 	user = _make_user(tier="pro")
 	mock_db = AsyncMock()
@@ -372,11 +388,14 @@ def test_create_listing_duplicate_returns_409():
 	app.dependency_overrides[_tier_dep] = lambda: user
 
 	client = TestClient(app, raise_server_exceptions=False)
-	resp = client.post("/api/v1/marketplace/beats", json={
-		"track_id": "track-test-001",
-		"title": "Duplicate",
-		"price_minor": 500,
-	})
+	resp = client.post(
+		"/api/v1/marketplace/beats",
+		json={
+			"track_id": "track-test-001",
+			"title": "Duplicate",
+			"price_minor": 500,
+		},
+	)
 
 	assert resp.status_code == 409
 	assert resp.json()["detail"]["error_code"] == "CONFLICT"
@@ -384,7 +403,8 @@ def test_create_listing_duplicate_returns_409():
 
 # ── POST /marketplace/beats/{beat_id}/purchase ────────────────────────────────
 
-def test_purchase_beat_inactive_listing_returns_404():
+
+def test_purchase_beat_inactive_listing_returns_404() -> None:
 	"""purchase_beat returns 404 when the listing is not active.
 
 	This exercises the guard path without hitting BeatPurchase() construction,
@@ -402,7 +422,7 @@ def test_purchase_beat_inactive_listing_returns_404():
 	assert resp.json()["detail"]["error_code"] == "NOT_FOUND"
 
 
-def test_purchase_own_beat_returns_422():
+def test_purchase_own_beat_returns_422() -> None:
 	client, mock_db, _ = _build_client(tier="pro", user_id="user-test-001")
 	listing = _make_listing(seller_id="user-test-001", price_minor=500)
 
@@ -416,7 +436,7 @@ def test_purchase_own_beat_returns_422():
 	assert "own beat" in resp.json()["detail"]["message"].lower()
 
 
-def test_purchase_already_purchased_returns_409():
+def test_purchase_already_purchased_returns_409() -> None:
 	client, mock_db, _ = _build_client(tier="free", user_id="buyer-999")
 	listing = _make_listing(seller_id="other-seller-001", price_minor=0)
 	existing = _make_purchase(buyer_id="buyer-999")
@@ -433,7 +453,7 @@ def test_purchase_already_purchased_returns_409():
 	assert resp.json()["detail"]["error_code"] == "CONFLICT"
 
 
-def test_purchase_listing_not_found_returns_404():
+def test_purchase_listing_not_found_returns_404() -> None:
 	client, mock_db, _ = _build_client(user_id="buyer-999")
 
 	result = MagicMock()
@@ -447,7 +467,8 @@ def test_purchase_listing_not_found_returns_404():
 
 # ── GET /marketplace/my-listings ──────────────────────────────────────────────
 
-def test_my_listings_returns_seller_listings():
+
+def test_my_listings_returns_seller_listings() -> None:
 	client, mock_db, _ = _build_client()
 	listing = _make_listing()
 
@@ -467,7 +488,8 @@ def test_my_listings_returns_seller_listings():
 
 # ── GET /marketplace/my-purchases ─────────────────────────────────────────────
 
-def test_my_purchases_returns_buyer_purchases():
+
+def test_my_purchases_returns_buyer_purchases() -> None:
 	client, mock_db, _ = _build_client(user_id="buyer-999")
 	purchase = _make_purchase(buyer_id="buyer-999")
 

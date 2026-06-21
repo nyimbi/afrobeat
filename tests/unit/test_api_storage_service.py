@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ── LocalStorageClient ────────────────────────────────────────────────────────
+
 
 def test_local_storage_creates_root_dir() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
-	client = LocalStorageClient()
+
+	LocalStorageClient()
 	assert Path("/tmp/gbedu_local_storage").exists()
 
 
 async def test_local_storage_upload_returns_file_url() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
+
 	client = LocalStorageClient()
 	with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
 		f.write(b"fake audio bytes")
@@ -31,6 +33,7 @@ async def test_local_storage_upload_returns_file_url() -> None:
 
 async def test_local_storage_upload_asserts_file_exists() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
+
 	client = LocalStorageClient()
 	with pytest.raises(AssertionError, match="not found"):
 		await client.upload_audio(Path("/nonexistent/file.mp3"), "tracks/x.mp3")
@@ -38,6 +41,7 @@ async def test_local_storage_upload_asserts_file_exists() -> None:
 
 async def test_local_storage_presigned_url_returns_file_path() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
+
 	client = LocalStorageClient()
 	url = await client.get_presigned_url("tracks/test-001.mp3")
 	assert "test-001.mp3" in url
@@ -45,8 +49,11 @@ async def test_local_storage_presigned_url_returns_file_path() -> None:
 
 async def test_local_storage_delete_existing_file() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
+
 	client = LocalStorageClient()
-	with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False, dir="/tmp/gbedu_local_storage") as f:
+	with tempfile.NamedTemporaryFile(
+		suffix=".mp3", delete=False, dir="/tmp/gbedu_local_storage"
+	) as f:
 		f.write(b"data")
 		tmp = Path(f.name)
 
@@ -57,6 +64,7 @@ async def test_local_storage_delete_existing_file() -> None:
 
 async def test_local_storage_delete_nonexistent_is_noop() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
+
 	client = LocalStorageClient()
 	# Should not raise
 	await client.delete_object("nonexistent/key.mp3")
@@ -64,6 +72,7 @@ async def test_local_storage_delete_nonexistent_is_noop() -> None:
 
 async def test_local_storage_upload_creates_parent_dirs() -> None:
 	from gbedu_api.services.storage_service import LocalStorageClient
+
 	client = LocalStorageClient()
 	with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
 		f.write(b"bytes")
@@ -75,6 +84,7 @@ async def test_local_storage_upload_creates_parent_dirs() -> None:
 
 
 # ── StorageClient ─────────────────────────────────────────────────────────────
+
 
 def _make_storage_settings():
 	s = MagicMock()
@@ -89,6 +99,7 @@ def _make_storage_settings():
 
 async def test_storage_client_upload_returns_public_url() -> None:
 	from gbedu_api.services.storage_service import StorageClient
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client") as mock_boto:
@@ -109,6 +120,7 @@ async def test_storage_client_upload_returns_public_url() -> None:
 
 async def test_storage_client_upload_raises_on_missing_file() -> None:
 	from gbedu_api.services.storage_service import StorageClient
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client"):
@@ -118,9 +130,10 @@ async def test_storage_client_upload_raises_on_missing_file() -> None:
 
 
 async def test_storage_client_upload_raises_on_botocore_error() -> None:
-	from gbedu_api.services.storage_service import StorageClient
 	from botocore.exceptions import BotoCoreError
+	from gbedu_api.services.storage_service import StorageClient
 	from gbedu_core.errors import StorageUploadError
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client") as mock_boto:
@@ -140,6 +153,7 @@ async def test_storage_client_upload_raises_on_botocore_error() -> None:
 
 async def test_storage_client_get_presigned_url() -> None:
 	from gbedu_api.services.storage_service import StorageClient
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client") as mock_boto:
@@ -155,6 +169,7 @@ async def test_storage_client_get_presigned_url() -> None:
 
 async def test_storage_client_get_presigned_url_raises_on_empty_key() -> None:
 	from gbedu_api.services.storage_service import StorageClient
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client"):
@@ -165,6 +180,7 @@ async def test_storage_client_get_presigned_url_raises_on_empty_key() -> None:
 
 async def test_storage_client_delete_object() -> None:
 	from gbedu_api.services.storage_service import StorageClient
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client") as mock_boto:
@@ -179,6 +195,7 @@ async def test_storage_client_delete_object() -> None:
 
 async def test_storage_client_delete_raises_on_empty_key() -> None:
 	from gbedu_api.services.storage_service import StorageClient
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client"):
@@ -188,9 +205,10 @@ async def test_storage_client_delete_raises_on_empty_key() -> None:
 
 
 async def test_storage_client_delete_raises_storage_error_on_boto_failure() -> None:
-	from gbedu_api.services.storage_service import StorageClient
 	from botocore.exceptions import ClientError
+	from gbedu_api.services.storage_service import StorageClient
 	from gbedu_core.errors import StorageDeleteError
+
 	settings = _make_storage_settings()
 
 	with patch("boto3.client") as mock_boto:
@@ -206,8 +224,10 @@ async def test_storage_client_delete_raises_storage_error_on_boto_failure() -> N
 
 
 def test_storage_client_init_asserts_settings() -> None:
-	from gbedu_api.services.storage_service import StorageClient
 	from unittest.mock import MagicMock
+
+	from gbedu_api.services.storage_service import StorageClient
+
 	bad = MagicMock()
 	bad.r2_account_id = ""
 	bad.r2_access_key_id = "key"

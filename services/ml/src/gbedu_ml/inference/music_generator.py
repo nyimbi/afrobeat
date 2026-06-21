@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from circuitbreaker import CircuitBreakerError
-from pydantic import BaseModel, ConfigDict, Field
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.errors import GenerationError
 from gbedu_core.schemas import GenerationRequest
-from gbedu_ml.models.ace_step import AceStepModel
-from gbedu_ml.models.stable_audio import StableAudioModel
-from gbedu_ml.models.yue import YuEModel
+from pydantic import BaseModel, ConfigDict, Field
+
 from gbedu_ml.prompts.afrobeats import AfrobeatsPromptEngine
+
+if TYPE_CHECKING:
+	from gbedu_ml.models.ace_step import AceStepModel
+	from gbedu_ml.models.stable_audio import StableAudioModel
+	from gbedu_ml.models.yue import YuEModel
 
 log = structlog.get_logger(__name__)
 
@@ -46,7 +48,9 @@ class MusicGenerator:
 		self._models = [ace_step, stable_audio, yue]
 		self._prompt_engine = AfrobeatsPromptEngine()
 
-	async def generate(self, request: GenerationRequest) -> MusicGenerationResult:  # pragma: no cover
+	async def generate(
+		self, request: GenerationRequest
+	) -> MusicGenerationResult:  # pragma: no cover
 		assert request.prompt, "request.prompt must not be empty"
 
 		prompt = self._prompt_engine.build_music_prompt(request)
@@ -68,9 +72,11 @@ class MusicGenerator:
 			# letting the model allocate and crash the entire process.
 			try:
 				import torch
+
 				if torch.cuda.is_available():
 					reserved = torch.cuda.memory_reserved(0)
-					total = torch.cuda.get_device_properties(0).total_memory
+					device_properties = cast(Any, torch.cuda).get_device_properties(0)
+					total = float(device_properties.total_memory)
 					utilization = reserved / total
 					if utilization > 0.85:
 						log.error(

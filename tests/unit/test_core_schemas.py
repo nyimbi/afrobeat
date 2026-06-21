@@ -1,35 +1,23 @@
 """Unit tests for all Pydantic schemas: valid data, invalid data, extra='forbid'."""
+
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from gbedu_core.schemas import (
-	BeatListingRead,
-	BeatPurchaseRead,
 	GenerationRequest,
-	GenerationResponse,
-	InvoiceRead,
-	JobRead,
 	JobStatusUpdate,
-	PaymentRead,
 	RefreshRequest,
-	SubscriptionRead,
 	TokenResponse,
 	TrackCreate,
-	TrackPublic,
-	TrackRead,
 	UserCreate,
-	UserPublic,
-	UserRead,
 	UserUpdate,
-	VoiceModelRead,
 )
-
+from pydantic import ValidationError
 
 # ── UserCreate ─────────────────────────────────────────────────────────────────
 
-def test_user_create_valid():
+
+def test_user_create_valid() -> None:
 	u = UserCreate(
 		email="test@example.com",
 		password="SecurePass1",
@@ -40,21 +28,21 @@ def test_user_create_valid():
 	assert u.full_name == "Ade Ojo"
 
 
-def test_user_create_invalid_email():
+def test_user_create_invalid_email() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		UserCreate(email="not-an-email", password="SecurePass1", full_name="Ade")
 	errors = exc_info.value.errors()
 	assert any(e["loc"] == ("email",) for e in errors)
 
 
-def test_user_create_password_too_short():
+def test_user_create_password_too_short() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		UserCreate(email="a@b.com", password="short", full_name="Ade")
 	errors = exc_info.value.errors()
 	assert any(e["loc"] == ("password",) for e in errors)
 
 
-def test_user_create_extra_field_forbidden():
+def test_user_create_extra_field_forbidden() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		UserCreate(
 			email="a@b.com",
@@ -66,7 +54,7 @@ def test_user_create_extra_field_forbidden():
 	assert any(e["type"] == "extra_forbidden" for e in errors)
 
 
-def test_user_create_invalid_language():
+def test_user_create_invalid_language() -> None:
 	with pytest.raises(ValidationError):
 		UserCreate(
 			email="a@b.com",
@@ -78,13 +66,14 @@ def test_user_create_invalid_language():
 
 # ── UserUpdate ─────────────────────────────────────────────────────────────────
 
-def test_user_update_all_none_valid():
+
+def test_user_update_all_none_valid() -> None:
 	u = UserUpdate()
 	assert u.full_name is None
 	assert u.new_password is None
 
 
-def test_user_update_extra_forbidden():
+def test_user_update_extra_forbidden() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		UserUpdate(unknown_key="value")
 	assert any(e["type"] == "extra_forbidden" for e in exc_info.value.errors())
@@ -92,7 +81,8 @@ def test_user_update_extra_forbidden():
 
 # ── TrackCreate ────────────────────────────────────────────────────────────────
 
-def test_track_create_valid():
+
+def test_track_create_valid() -> None:
 	t = TrackCreate(
 		title="Summer Nights",
 		prompt="Slow afropop, romantic vibe, 90bpm",
@@ -106,7 +96,7 @@ def test_track_create_valid():
 	assert t.energy_level == 6
 
 
-def test_track_create_energy_out_of_range():
+def test_track_create_energy_out_of_range() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		TrackCreate(
 			title="X",
@@ -118,7 +108,7 @@ def test_track_create_energy_out_of_range():
 	assert any(e["loc"] == ("energy_level",) for e in exc_info.value.errors())
 
 
-def test_track_create_bpm_out_of_range():
+def test_track_create_bpm_out_of_range() -> None:
 	with pytest.raises(ValidationError):
 		TrackCreate(
 			title="X",
@@ -129,7 +119,7 @@ def test_track_create_bpm_out_of_range():
 		)
 
 
-def test_track_create_invalid_sub_genre():
+def test_track_create_invalid_sub_genre() -> None:
 	with pytest.raises(ValidationError):
 		TrackCreate(
 			title="X",
@@ -139,7 +129,7 @@ def test_track_create_invalid_sub_genre():
 		)
 
 
-def test_track_create_extra_forbidden():
+def test_track_create_extra_forbidden() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		TrackCreate(
 			title="X",
@@ -153,7 +143,8 @@ def test_track_create_extra_forbidden():
 
 # ── GenerationRequest ──────────────────────────────────────────────────────────
 
-def test_generation_request_strips_prompt():
+
+def test_generation_request_strips_prompt() -> None:
 	r = GenerationRequest(
 		prompt="  groovy beat  ",
 		sub_genre="afropop",
@@ -162,17 +153,17 @@ def test_generation_request_strips_prompt():
 	assert r.prompt == "groovy beat"
 
 
-def test_generation_request_duration_bounds():
+def test_generation_request_duration_bounds() -> None:
 	with pytest.raises(ValidationError):
 		GenerationRequest(
 			prompt="test",
 			sub_genre="afropop",
 			language="english",
-			duration_seconds=10,   # below 30
+			duration_seconds=10,  # below 30
 		)
 
 
-def test_generation_request_extra_forbidden():
+def test_generation_request_extra_forbidden() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		GenerationRequest(
 			prompt="test",
@@ -185,25 +176,27 @@ def test_generation_request_extra_forbidden():
 
 # ── JobStatusUpdate ────────────────────────────────────────────────────────────
 
-def test_job_status_update_valid():
+
+def test_job_status_update_valid() -> None:
 	u = JobStatusUpdate(status="complete", progress_percent=100)
 	assert u.status.value == "complete"
 	assert u.progress_percent == 100
 
 
-def test_job_status_update_progress_out_of_range():
+def test_job_status_update_progress_out_of_range() -> None:
 	with pytest.raises(ValidationError):
 		JobStatusUpdate(status="complete", progress_percent=101)
 
 
-def test_job_status_update_invalid_status():
+def test_job_status_update_invalid_status() -> None:
 	with pytest.raises(ValidationError):
 		JobStatusUpdate(status="flying")
 
 
 # ── TokenResponse ──────────────────────────────────────────────────────────────
 
-def test_token_response_defaults():
+
+def test_token_response_defaults() -> None:
 	t = TokenResponse(
 		access_token="abc",
 		refresh_token="def",
@@ -212,7 +205,7 @@ def test_token_response_defaults():
 	assert t.token_type == "bearer"
 
 
-def test_token_response_extra_forbidden():
+def test_token_response_extra_forbidden() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		TokenResponse(
 			access_token="abc",
@@ -225,12 +218,13 @@ def test_token_response_extra_forbidden():
 
 # ── RefreshRequest ─────────────────────────────────────────────────────────────
 
-def test_refresh_request_valid():
+
+def test_refresh_request_valid() -> None:
 	r = RefreshRequest(refresh_token="some_token")
 	assert r.refresh_token == "some_token"
 
 
-def test_refresh_request_extra_forbidden():
+def test_refresh_request_extra_forbidden() -> None:
 	with pytest.raises(ValidationError) as exc_info:
 		RefreshRequest(refresh_token="tok", bonus="nope")
 	assert any(e["type"] == "extra_forbidden" for e in exc_info.value.errors())

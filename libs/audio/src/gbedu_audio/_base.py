@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+
+def _empty_metadata() -> dict[str, Any]:
+	return {}
 
 
 @dataclass
@@ -31,4 +36,4 @@ class ProcessingResult:
 	input: AudioFile
 	output: AudioFile
 	processing_time_seconds: float
-	metadata: dict = field(default_factory=dict)
+	metadata: dict[str, Any] = field(default_factory=_empty_metadata)

@@ -11,7 +11,7 @@ import structlog
 from opentelemetry import trace
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from gbedu_audio._base import AudioFile, AudioProcessingError
+from gbedu_audio._base import AudioProcessingError
 
 log = structlog.get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
@@ -30,7 +30,9 @@ def _load_audio(audio_path: Path) -> tuple[np.ndarray, int]:
 class AudioAnalyzer:
 	"""Async audio analysis — BPM, key, energy, features, clip selection."""
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def detect_bpm(self, audio_path: Path) -> float:
 		if not audio_path.is_file():
 			raise AudioProcessingError(f"not a file: {audio_path}", stage="detect_bpm")
@@ -53,10 +55,13 @@ class AudioAnalyzer:
 		tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
 		# beat_track returns ndarray in newer librosa — coerce to scalar
 		if hasattr(tempo, "__len__"):
-			tempo = float(tempo[0]) if len(tempo) > 0 else 120.0
+			arr = tempo  # type: ignore[reportUnknownVariableType]
+			tempo = float(arr[0]) if len(arr) > 0 else 120.0  # type: ignore[reportUnknownArgumentType]
 		return float(tempo)
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def detect_key(self, audio_path: Path) -> str:
 		assert audio_path.is_file(), f"not a file: {audio_path}"
 		t0 = time.perf_counter()
@@ -81,8 +86,12 @@ class AudioAnalyzer:
 		chroma_mean = chroma.mean(axis=1)  # shape (12,)
 
 		# Krumhansl-Schmuckler key profiles
-		major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-		minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+		major_profile = np.array(
+			[6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+		)
+		minor_profile = np.array(
+			[6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+		)
 
 		best_corr = -np.inf
 		best_key = "C major"
@@ -98,7 +107,9 @@ class AudioAnalyzer:
 
 		return best_key
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def detect_energy(self, audio_path: Path) -> float:
 		assert audio_path.is_file(), f"not a file: {audio_path}"
 		t0 = time.perf_counter()
@@ -117,14 +128,16 @@ class AudioAnalyzer:
 
 	def _detect_energy_sync(self, audio_path: Path) -> float:
 		y, _ = _load_audio(audio_path)
-		rms = float(np.sqrt(np.mean(y ** 2)))
+		rms = float(np.sqrt(np.mean(y**2)))
 		# Map RMS (typ. 0.0–0.5) onto 0–10 scale with logarithmic feel
 		# 0.5 RMS == 10, silence == 0
 		rms_clamped = np.clip(rms, 1e-9, 0.5)
 		energy = 10.0 * (np.log10(rms_clamped / 1e-9) / np.log10(0.5 / 1e-9))
 		return float(np.clip(energy, 0.0, 10.0))
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def extract_features(self, audio_path: Path) -> dict[str, Any]:
 		assert audio_path.is_file(), f"not a file: {audio_path}"
 		t0 = time.perf_counter()
@@ -145,12 +158,16 @@ class AudioAnalyzer:
 		duration = float(librosa.get_duration(y=y, sr=sr))
 
 		tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-		bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
+		bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)  # type: ignore[reportIndexIssue]
 
 		chroma = librosa.feature.chroma_cqt(y=y, sr=sr, bins_per_octave=36)
 		chroma_mean = chroma.mean(axis=1)
-		major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-		minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+		major_profile = np.array(
+			[6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+		)
+		minor_profile = np.array(
+			[6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+		)
 		best_corr = -np.inf
 		key = "C major"
 		for shift in range(12):
@@ -160,12 +177,15 @@ class AudioAnalyzer:
 					best_corr = c
 					key = f"{_PITCH_CLASSES[shift]} {mode}"
 
-		rms = float(np.sqrt(np.mean(y ** 2)))
+		rms = float(np.sqrt(np.mean(y**2)))
 		rms_clamped = np.clip(rms, 1e-9, 0.5)
-		energy = float(np.clip(
-			10.0 * (np.log10(rms_clamped / 1e-9) / np.log10(0.5 / 1e-9)),
-			0.0, 10.0,
-		))
+		energy = float(
+			np.clip(
+				10.0 * (np.log10(rms_clamped / 1e-9) / np.log10(0.5 / 1e-9)),
+				0.0,
+				10.0,
+			)
+		)
 
 		mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
 		mfcc_means = mfccs.mean(axis=1).tolist()
@@ -184,7 +204,9 @@ class AudioAnalyzer:
 			"zero_crossing_rate": zcr,
 		}
 
-	@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+	@retry(
+		stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True
+	)
 	async def find_best_clip(
 		self,
 		audio_path: Path,
@@ -200,16 +222,27 @@ class AudioAnalyzer:
 			try:
 				loop = asyncio.get_running_loop()
 				result = await loop.run_in_executor(
-					None, self._find_best_clip_sync, audio_path, duration_seconds,
+					None,
+					self._find_best_clip_sync,
+					audio_path,
+					duration_seconds,
 				)
 				elapsed = time.perf_counter() - t0
-				log.info("best clip found", path=str(audio_path), start=result[0], end=result[1], elapsed_s=elapsed)
+				log.info(
+					"best clip found",
+					path=str(audio_path),
+					start=result[0],
+					end=result[1],
+					elapsed_s=elapsed,
+				)
 				return result
 			except Exception as exc:
 				span.record_exception(exc)
 				raise AudioProcessingError(str(exc), stage="find_best_clip") from exc
 
-	def _find_best_clip_sync(self, audio_path: Path, duration_seconds: float) -> tuple[float, float]:
+	def _find_best_clip_sync(
+		self, audio_path: Path, duration_seconds: float
+	) -> tuple[float, float]:
 		y, sr = _load_audio(audio_path)
 		total_duration = len(y) / sr
 

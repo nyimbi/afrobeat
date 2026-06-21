@@ -15,8 +15,9 @@ Sources / references used:
 from __future__ import annotations
 
 import re
-import structlog
 from typing import NamedTuple
+
+import structlog
 
 log = structlog.get_logger(__name__)
 
@@ -39,35 +40,39 @@ _PHRASE_BANK: list[PidginPhrase] = [
 	PidginPhrase("e be like say I fall for you", "it seems I've fallen for you", "love"),
 	PidginPhrase("make we love scatter scatter", "let our love spread everywhere", "love"),
 	PidginPhrase("you sabi how I feel", "you know how I feel", "love"),
-
 	# hustle
 	PidginPhrase("we dey grind every day", "we grind every day", "hustle"),
 	PidginPhrase("no sleep, no rest, make money", "no sleep, no rest, make money", "hustle"),
 	PidginPhrase("hustler no dey carry last", "a hustler never comes last", "hustle"),
-	PidginPhrase("from nothing we don reach something", "from nothing we've achieved something", "hustle"),
+	PidginPhrase(
+		"from nothing we don reach something", "from nothing we've achieved something", "hustle"
+	),
 	PidginPhrase("oga, the hustle real", "boss, the struggle is real", "hustle"),
 	PidginPhrase("wetin we go do? We go manage", "what will we do? We will cope", "hustle"),
-
 	# celebration
-	PidginPhrase("make we celebrate, life too short", "let's celebrate, life is too short", "celebration"),
+	PidginPhrase(
+		"make we celebrate, life too short", "let's celebrate, life is too short", "celebration"
+	),
 	PidginPhrase("e don do! We don make am", "it's done! We have made it", "celebration"),
 	PidginPhrase("today na our day, no wahala", "today is our day, no trouble", "celebration"),
 	PidginPhrase("pour am! E don do!", "pour it! It's done!", "celebration"),
 	PidginPhrase("Lagos dey party all night long", "Lagos parties all night long", "celebration"),
-
 	# flex
 	PidginPhrase("I dey on top, no cap", "I am on top, no cap", "flex"),
 	PidginPhrase("my drip dey speak for me", "my style speaks for me", "flex"),
 	PidginPhrase("dem dey watch but dem no fit touch", "they watch but cannot touch", "flex"),
 	PidginPhrase("I no send anybody", "I don't care about anyone", "flex"),
 	PidginPhrase("na me be the oga at the top", "I am the boss at the top", "flex"),
-
 	# heartbreak
-	PidginPhrase("you don break my heart finish", "you have completely broken my heart", "heartbreak"),
+	PidginPhrase(
+		"you don break my heart finish", "you have completely broken my heart", "heartbreak"
+	),
 	PidginPhrase("e pain me, but I go survive", "it hurts, but I will survive", "heartbreak"),
 	PidginPhrase("wetin I do you make you leave?", "what did I do for you to leave?", "heartbreak"),
 	PidginPhrase("I cry but nobody see am", "I cry but nobody sees it", "heartbreak"),
-	PidginPhrase("the love wey I give, you waste am", "the love I gave, you wasted it", "heartbreak"),
+	PidginPhrase(
+		"the love wey I give, you waste am", "the love I gave, you wasted it", "heartbreak"
+	),
 ]
 
 # ── English-to-Pidgin substitution table ─────────────────────────────────────
@@ -78,32 +83,32 @@ _PHRASE_BANK: list[PidginPhrase] = [
 
 _SUBSTITUTION_PAIRS: list[tuple[str, str]] = [
 	# multi-word first (greedy matching preference)
-	("what is happening",   "wetin dey happen"),
-	("what is going on",    "wetin dey happen"),
-	("what is wrong",       "wetin do am"),
-	("let us go",           "make we go"),
-	("let's go",            "make we go"),
-	("i cannot",            "I no fit"),
-	("i can not",           "I no fit"),
-	("i don't know",        "I no sabi"),
-	("i do not know",       "I no sabi"),
-	("you know",            "you sabi"),
-	("no problem",          "no wahala"),
-	("no trouble",          "no wahala"),
-	("do you understand",   "you understand abi?"),
-	("do you hear me",      "you hear me shey?"),
-	("it is not",           "e no be"),
-	("that is not",         "na lie"),
-	("come here",           "come here na"),
-	("go away",             "comot here"),
-	("take care",           "take am easy"),
-	("i love you",          "I love you die"),
-	("we have made it",     "we don make am"),
-	("i am tired",          "I don tire"),
-	("they are",            "dem dey"),
-	("we are",              "we dey"),
-	("i am",                "na me"),
-	("it is",               "na"),
+	("what is happening", "wetin dey happen"),
+	("what is going on", "wetin dey happen"),
+	("what is wrong", "wetin do am"),
+	("let us go", "make we go"),
+	("let's go", "make we go"),
+	("i cannot", "I no fit"),
+	("i can not", "I no fit"),
+	("i don't know", "I no sabi"),
+	("i do not know", "I no sabi"),
+	("you know", "you sabi"),
+	("no problem", "no wahala"),
+	("no trouble", "no wahala"),
+	("do you understand", "you understand abi?"),
+	("do you hear me", "you hear me shey?"),
+	("it is not", "e no be"),
+	("that is not", "na lie"),
+	("come here", "come here na"),
+	("go away", "comot here"),
+	("take care", "take am easy"),
+	("i love you", "I love you die"),
+	("we have made it", "we don make am"),
+	("i am tired", "I don tire"),
+	("they are", "dem dey"),
+	("we are", "we dey"),
+	("i am", "na me"),
+	("it is", "na"),
 ]
 
 # Pre-compile a single regex from the substitution table for efficiency.
@@ -157,7 +162,7 @@ class PidginPatternLibrary:
 			for p in _PHRASE_BANK:
 				theme_buckets.setdefault(p.theme, []).append(p)
 
-			pool = []
+			pool: list[PidginPhrase] = []
 			theme_list = list(theme_buckets.keys())
 			idx = 0
 			collected = 0
@@ -217,7 +222,7 @@ class PidginPatternLibrary:
 			...
 		"""
 		examples = self.few_shot_examples(themes=themes, n=n)
-		lines = ['Example Nigerian Pidgin phrases (use as authentic reference):']
+		lines = ["Example Nigerian Pidgin phrases (use as authentic reference):"]
 		for ex in examples:
 			lines.append(f'  - "{ex.pidgin}" ({ex.english_gloss}) [{ex.theme}]')
 		return "\n".join(lines)

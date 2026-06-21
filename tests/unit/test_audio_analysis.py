@@ -3,21 +3,19 @@
 Generates 1-second sine waves and kick drum signals with numpy/scipy so
 librosa has real audio data — no mocks, no pre-committed audio files.
 """
+
 from __future__ import annotations
 
-import asyncio
-import struct
 import wave
 from pathlib import Path
 
 import numpy as np
 import pytest
-
-from gbedu_audio.analysis import AudioAnalyzer
 from gbedu_audio._base import AudioProcessingError
-
+from gbedu_audio.analysis import AudioAnalyzer
 
 # ── Audio fixture helpers ──────────────────────────────────────────────────────
+
 
 def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 22050) -> None:
 	"""Write a mono float array as a 16-bit PCM WAV file."""
@@ -79,6 +77,7 @@ def _kick_drum_signal(
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="module")
 def tmp_audio_dir(tmp_path_factory) -> Path:
 	return tmp_path_factory.mktemp("audio")
@@ -118,8 +117,9 @@ def kick_120bpm_wav(tmp_audio_dir: Path) -> Path:
 
 # ── detect_bpm ─────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_detect_bpm_returns_float(kick_100bpm_wav: Path):
+async def test_detect_bpm_returns_float(kick_100bpm_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	bpm = await analyzer.detect_bpm(kick_100bpm_wav)
 	assert isinstance(bpm, float)
@@ -127,7 +127,7 @@ async def test_detect_bpm_returns_float(kick_100bpm_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_detect_bpm_100_within_tolerance(kick_100bpm_wav: Path):
+async def test_detect_bpm_100_within_tolerance(kick_100bpm_wav: Path) -> None:
 	"""BPM detection should be within ±20 of 100 for a clear 4/4 pattern.
 
 	librosa beat_track may return half or double-time; we accept the range
@@ -139,14 +139,14 @@ async def test_detect_bpm_100_within_tolerance(kick_100bpm_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_detect_bpm_120_plausible(kick_120bpm_wav: Path):
+async def test_detect_bpm_120_plausible(kick_120bpm_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	bpm = await analyzer.detect_bpm(kick_120bpm_wav)
 	assert 60.0 <= bpm <= 240.0, f"BPM {bpm} implausible for 120 bpm signal"
 
 
 @pytest.mark.asyncio
-async def test_detect_bpm_nonexistent_file_raises():
+async def test_detect_bpm_nonexistent_file_raises() -> None:
 	analyzer = AudioAnalyzer()
 	with pytest.raises(AudioProcessingError):
 		await analyzer.detect_bpm(Path("/nonexistent/track.wav"))
@@ -154,8 +154,9 @@ async def test_detect_bpm_nonexistent_file_raises():
 
 # ── detect_energy ──────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_detect_energy_in_range(sine_440_wav: Path):
+async def test_detect_energy_in_range(sine_440_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	energy = await analyzer.detect_energy(sine_440_wav)
 	assert isinstance(energy, float)
@@ -163,7 +164,9 @@ async def test_detect_energy_in_range(sine_440_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_detect_energy_loud_higher_than_quiet(sine_440_wav: Path, sine_silent_wav: Path):
+async def test_detect_energy_loud_higher_than_quiet(
+	sine_440_wav: Path, sine_silent_wav: Path
+) -> None:
 	analyzer = AudioAnalyzer()
 	loud_energy = await analyzer.detect_energy(sine_440_wav)
 	quiet_energy = await analyzer.detect_energy(sine_silent_wav)
@@ -171,7 +174,7 @@ async def test_detect_energy_loud_higher_than_quiet(sine_440_wav: Path, sine_sil
 
 
 @pytest.mark.asyncio
-async def test_detect_energy_kick_drum_high(kick_100bpm_wav: Path):
+async def test_detect_energy_kick_drum_high(kick_100bpm_wav: Path) -> None:
 	"""Percussive content should produce non-trivial energy."""
 	analyzer = AudioAnalyzer()
 	energy = await analyzer.detect_energy(kick_100bpm_wav)
@@ -180,15 +183,22 @@ async def test_detect_energy_kick_drum_high(kick_100bpm_wav: Path):
 
 # ── extract_features ───────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_extract_features_structure(sine_440_wav: Path):
+async def test_extract_features_structure(sine_440_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	features = await analyzer.extract_features(sine_440_wav)
 
 	assert isinstance(features, dict)
 	required_keys = {
-		"bpm", "key", "energy", "duration_seconds",
-		"sample_rate", "mfccs", "spectral_centroid_hz", "zero_crossing_rate",
+		"bpm",
+		"key",
+		"energy",
+		"duration_seconds",
+		"sample_rate",
+		"mfccs",
+		"spectral_centroid_hz",
+		"zero_crossing_rate",
 	}
 	assert required_keys.issubset(features.keys()), (
 		f"Missing keys: {required_keys - features.keys()}"
@@ -196,7 +206,7 @@ async def test_extract_features_structure(sine_440_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_extract_features_types(sine_440_wav: Path):
+async def test_extract_features_types(sine_440_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	features = await analyzer.extract_features(sine_440_wav)
 
@@ -212,7 +222,7 @@ async def test_extract_features_types(sine_440_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_extract_features_duration_approx(sine_440_wav: Path):
+async def test_extract_features_duration_approx(sine_440_wav: Path) -> None:
 	"""2-second fixture should be detected as ~2 seconds."""
 	analyzer = AudioAnalyzer()
 	features = await analyzer.extract_features(sine_440_wav)
@@ -220,14 +230,14 @@ async def test_extract_features_duration_approx(sine_440_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_extract_features_energy_in_range(sine_440_wav: Path):
+async def test_extract_features_energy_in_range(sine_440_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	features = await analyzer.extract_features(sine_440_wav)
 	assert 0.0 <= features["energy"] <= 10.0
 
 
 @pytest.mark.asyncio
-async def test_extract_features_key_format(sine_440_wav: Path):
+async def test_extract_features_key_format(sine_440_wav: Path) -> None:
 	"""Key string must be '<note> <mode>' e.g. 'A major'."""
 	analyzer = AudioAnalyzer()
 	features = await analyzer.extract_features(sine_440_wav)
@@ -239,8 +249,9 @@ async def test_extract_features_key_format(sine_440_wav: Path):
 
 # ── find_best_clip ─────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_find_best_clip_returns_tuple(kick_100bpm_wav: Path):
+async def test_find_best_clip_returns_tuple(kick_100bpm_wav: Path) -> None:
 	analyzer = AudioAnalyzer()
 	start, end = await analyzer.find_best_clip(kick_100bpm_wav, duration_seconds=2.0)
 	assert isinstance(start, float)
@@ -250,7 +261,7 @@ async def test_find_best_clip_returns_tuple(kick_100bpm_wav: Path):
 
 
 @pytest.mark.asyncio
-async def test_find_best_clip_short_file(sine_440_wav: Path):
+async def test_find_best_clip_short_file(sine_440_wav: Path) -> None:
 	"""When file is shorter than requested clip, return (0, total_duration)."""
 	analyzer = AudioAnalyzer()
 	start, end = await analyzer.find_best_clip(sine_440_wav, duration_seconds=30.0)

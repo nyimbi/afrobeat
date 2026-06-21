@@ -7,18 +7,17 @@ the same (user, event) pair within the window is a no-op. This prevents
 duplicate emails from Celery retries or accidental double-enqueue.
 """
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from celery import Task
-from opentelemetry import trace
-from sqlalchemy import select
-
 from gbedu_core.config import EmailSettings, RedisSettings
 from gbedu_core.models.track import Track
 from gbedu_core.models.user import User
 from gbedu_core.telemetry import get_tracer, increment_error_count
-from gbedu_worker.celery_app import app
+from opentelemetry import trace
+
+from gbedu_worker.celery_app import celery_task, retry_task
 from gbedu_worker.db import get_async_session, run_async
 
 log = structlog.get_logger(__name__)
@@ -32,7 +31,8 @@ _EMAIL_DEDUP_TTL = 86_400  # 24 h
 
 # ── Task definitions ───────────────────────────────────────────────────────────
 
-@app.task(
+
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.notifications.send_generation_complete_email",
 	max_retries=3,
@@ -53,16 +53,16 @@ def send_generation_complete_email(self: Task, user_id: str, track_id: str) -> d
 		span.set_attribute("user.id", user_id)
 		span.set_attribute("track.id", track_id)
 		try:
-			return run_async(_send_generation_complete(user_id, track_id))
+			return run_async(_send_generation_complete, user_id, track_id)
 		except Exception as exc:
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+			retry_task(self, exc=exc, countdown=_email_retry_countdown(self.request.retries))
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.notifications.send_welcome_email",
 	max_retries=3,
@@ -81,16 +81,16 @@ def send_welcome_email(self: Task, user_id: str) -> dict[str, Any]:
 	with tracer.start_as_current_span("task.send_welcome_email") as span:
 		span.set_attribute("user.id", user_id)
 		try:
-			return run_async(_send_welcome(user_id))
+			return run_async(_send_welcome, user_id)
 		except Exception as exc:
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+			retry_task(self, exc=exc, countdown=_email_retry_countdown(self.request.retries))
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.notifications.send_verify_email",
 	max_retries=3,
@@ -110,16 +110,16 @@ def send_verify_email(self: Task, user_id: str, verify_url: str) -> dict[str, An
 	with tracer.start_as_current_span("task.send_verify_email") as span:
 		span.set_attribute("user.id", user_id)
 		try:
-			return run_async(_send_verify_email(user_id, verify_url))
+			return run_async(_send_verify_email, user_id, verify_url)
 		except Exception as exc:  # pragma: no cover
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+			retry_task(self, exc=exc, countdown=_email_retry_countdown(self.request.retries))
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.notifications.send_password_reset_email",
 	max_retries=3,
@@ -139,16 +139,16 @@ def send_password_reset_email(self: Task, user_id: str, reset_url: str) -> dict[
 	with tracer.start_as_current_span("task.send_password_reset_email") as span:
 		span.set_attribute("user.id", user_id)
 		try:
-			return run_async(_send_password_reset(user_id, reset_url))
+			return run_async(_send_password_reset, user_id, reset_url)
 		except Exception as exc:  # pragma: no cover
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+			retry_task(self, exc=exc, countdown=_email_retry_countdown(self.request.retries))
 
 
-@app.task(
+@celery_task(
 	bind=True,
 	name="gbedu_worker.tasks.notifications.send_subscription_confirmation",
 	max_retries=3,
@@ -169,21 +169,24 @@ def send_subscription_confirmation(self: Task, user_id: str, tier: str) -> dict[
 		span.set_attribute("user.id", user_id)
 		span.set_attribute("subscription.tier", tier)
 		try:
-			return run_async(_send_subscription_confirmation(user_id, tier))
+			return run_async(_send_subscription_confirmation, user_id, tier)
 		except Exception as exc:  # pragma: no cover
 			task_log.error("email task failed", exc_type=type(exc).__name__, exc_msg=str(exc))
 			increment_error_count(error_code=type(exc).__name__, service="worker.notifications")
 			span.record_exception(exc)
 			span.set_status(trace.StatusCode.ERROR, str(exc))
-			raise self.retry(exc=exc, countdown=_email_retry_countdown(self.request.retries))
+			retry_task(self, exc=exc, countdown=_email_retry_countdown(self.request.retries))
 
 
 # ── Async implementations ──────────────────────────────────────────────────────
 
+
 async def _send_generation_complete(user_id: str, track_id: str) -> dict[str, Any]:
 	dedup_key = f"email:gen_complete:{user_id}:{track_id}"
 	if await _already_sent(dedup_key):
-		log.info("generation_complete email already sent — skipping", user_id=user_id, track_id=track_id)
+		log.info(
+			"generation_complete email already sent — skipping", user_id=user_id, track_id=track_id
+		)
 		return {"status": "skipped", "reason": "duplicate"}
 
 	async with get_async_session() as session:
@@ -298,8 +301,7 @@ async def _send_password_reset(user_id: str, reset_url: str) -> dict[str, Any]:
 		)
 
 	# Short TTL (1 h) — reset tokens expire, no point re-deduping across days.
-	import redis.asyncio as aioredis
-	r = await aioredis.from_url(_redis_settings.url, encoding="utf-8", decode_responses=True)
+	r = await _redis_client()
 	async with r:
 		await r.setex(f"email_sent:{dedup_key}", 3_600, "1")
 
@@ -310,7 +312,9 @@ async def _send_password_reset(user_id: str, reset_url: str) -> dict[str, Any]:
 async def _send_subscription_confirmation(user_id: str, tier: str) -> dict[str, Any]:
 	dedup_key = f"email:sub_confirm:{user_id}:{tier}"
 	if await _already_sent(dedup_key):
-		log.info("subscription_confirmation email already sent — skipping", user_id=user_id, tier=tier)
+		log.info(
+			"subscription_confirmation email already sent — skipping", user_id=user_id, tier=tier
+		)
 		return {"status": "skipped", "reason": "duplicate"}
 
 	async with get_async_session() as session:
@@ -340,6 +344,7 @@ async def _send_subscription_confirmation(user_id: str, tier: str) -> dict[str, 
 
 # ── Email service builder ──────────────────────────────────────────────────────
 
+
 def _build_email_service() -> _SmtpEmailService:  # pragma: no cover
 	return _SmtpEmailService(settings=_email_settings)
 
@@ -358,10 +363,9 @@ class _SmtpEmailService:
 		template: str,
 		context: dict[str, Any],
 	) -> None:
-		import smtplib
+		import asyncio
 		from email.mime.multipart import MIMEMultipart
 		from email.mime.text import MIMEText
-		import asyncio
 
 		body = self._render_template(template, context)
 
@@ -377,6 +381,7 @@ class _SmtpEmailService:
 
 	def _send_smtp(self, to: str, msg: Any) -> None:
 		import smtplib
+
 		with smtplib.SMTP(self._settings.smtp_host, self._settings.smtp_port) as server:
 			if self._settings.use_tls:
 				server.starttls()
@@ -387,6 +392,7 @@ class _SmtpEmailService:
 	@staticmethod
 	def _render_template(template: str, context: dict[str, Any]) -> str:
 		from pathlib import Path
+
 		from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 		template_dir = Path(__file__).parent.parent / "templates" / "email"
@@ -402,18 +408,27 @@ class _SmtpEmailService:
 
 # ── Redis dedup helpers ────────────────────────────────────────────────────────
 
+
 async def _already_sent(key: str) -> bool:
-	import redis.asyncio as aioredis
-	r = await aioredis.from_url(_redis_settings.url, encoding="utf-8", decode_responses=True)
+	r = await _redis_client()
 	async with r:
 		return bool(await r.exists(f"email_sent:{key}"))
 
 
 async def _mark_sent(key: str) -> None:
-	import redis.asyncio as aioredis
-	r = await aioredis.from_url(_redis_settings.url, encoding="utf-8", decode_responses=True)
+	r = await _redis_client()
 	async with r:
 		await r.setex(f"email_sent:{key}", _EMAIL_DEDUP_TTL, "1")
+
+
+async def _redis_client() -> Any:
+	import redis.asyncio as aioredis
+
+	return await cast(Any, aioredis).from_url(
+		_redis_settings.url,
+		encoding="utf-8",
+		decode_responses=True,
+	)
 
 
 def _email_retry_countdown(retry_num: int) -> int:

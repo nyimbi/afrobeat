@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import structlog
-from aiosmtplib import SMTP, SMTPException
-from jinja2 import Environment, PackageLoader, select_autoescape
-
+from aiosmtplib import SMTP
 from gbedu_core.config import EmailSettings
+from jinja2 import Environment, PackageLoader, select_autoescape
 
 log = structlog.get_logger(__name__)
 
@@ -62,7 +61,7 @@ class EmailService:
 			return tmpl.render(**ctx)
 		except Exception:
 			# Degrade gracefully — plain text substitute
-			return f"<p>{ {k: v for k, v in ctx.items()} }</p>"
+			return f"<p>{dict(ctx.items())}</p>"
 
 	async def send_welcome(self, to: str, full_name: str) -> None:
 		html = self._render("welcome.html", full_name=full_name)
@@ -89,4 +88,4 @@ class EmailService:
 			track_title=track_title,
 			track_url=track_url,
 		)
-		await self._send(to, f"Your track \"{track_title}\" is ready", html)
+		await self._send(to, f'Your track "{track_title}" is ready', html)

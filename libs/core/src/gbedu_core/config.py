@@ -9,7 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DatabaseSettings(BaseSettings):
 	model_config = SettingsConfigDict(extra="ignore")
 
-	url: str = Field(alias="DATABASE_URL", default="postgresql+asyncpg://gbedu:gbedu@localhost:5432/gbedu")
+	url: str = Field(
+		alias="DATABASE_URL", default="postgresql+asyncpg://gbedu:gbedu@localhost:5432/gbedu"
+	)
 	pool_size: int = Field(default=20)
 	max_overflow: int = Field(default=40)
 	pool_pre_ping: bool = Field(default=True)
@@ -125,7 +127,9 @@ class Settings(BaseSettings):
 	environment: str = Field(alias="ENVIRONMENT", default="development")
 	log_level: str = Field(alias="LOG_LEVEL", default="INFO")
 	frontend_url: str = Field(alias="FRONTEND_URL", default="http://localhost:3000")
-	allowed_origins: str = Field(alias="ALLOWED_ORIGINS", default="http://localhost:3000,http://localhost:8000")
+	allowed_origins: str = Field(
+		alias="ALLOWED_ORIGINS", default="http://localhost:3000,http://localhost:8000"
+	)
 
 	database: DatabaseSettings = Field(default_factory=DatabaseSettings)
 	redis: RedisSettings = Field(default_factory=RedisSettings)
@@ -151,15 +155,13 @@ class Settings(BaseSettings):
 		return v.upper()
 
 	@model_validator(mode="after")
-	def validate_production_secrets(self) -> "Settings":
+	def validate_production_secrets(self) -> Settings:
 		if self.is_production:
 			assert self.jwt.secret_key != "change-this-in-production", (
 				"JWT_SECRET_KEY must be set to a secure random value in production — "
 				"the default is a known plaintext value."
 			)
-			assert self.stripe.secret_key, (
-				"STRIPE_SECRET_KEY must be set in production."
-			)
+			assert self.stripe.secret_key, "STRIPE_SECRET_KEY must be set in production."
 			assert self.paystack.secret_key, (
 				"PAYSTACK_SECRET_KEY must be set in production — "
 				"empty key allows forged Paystack webhook attacks."

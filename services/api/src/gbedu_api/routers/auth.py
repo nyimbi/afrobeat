@@ -1,28 +1,38 @@
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import Callable
+from typing import Annotated, Any, cast
 
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from gbedu_core.errors import GbeduError
+from gbedu_core.models.user import User
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gbedu_api.config import RATE_LIMIT_LOGIN, RATE_LIMIT_REFRESH, RATE_LIMIT_REGISTER, get_settings
-from gbedu_api.deps import get_current_active_user, get_db, get_redis, limiter
+from gbedu_api.deps import get_db, get_redis, limiter
 from gbedu_api.services.auth_service import AuthService, TokenPair
-from gbedu_api.worker_tasks import enqueue_password_reset_email, enqueue_verify_email, enqueue_welcome_email
-from gbedu_core.errors import GbeduError
-from gbedu_core.models.user import User
+from gbedu_api.worker_tasks import (
+	enqueue_password_reset_email,
+	enqueue_verify_email,
+	enqueue_welcome_email,
+)
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _rate_limit[F: Callable[..., Any]](limit_value: str) -> Callable[[F], F]:
+	return cast(Callable[[F], F], cast(Any, limiter).limit(limit_value))
+
+
 # ── Request / Response schemas ─────────────────────────────────────────────────
+
 
 class RegisterRequest(BaseModel):
 	model_config = ConfigDict(extra="forbid")
@@ -113,25 +123,25 @@ def _user_summary(user: User) -> UserSummary:
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+
 @router.post(
 	"/register",
 	response_model=RegisterResponse,
 	status_code=status.HTTP_201_CREATED,
 	summary="Register a new user account",
 )
-@limiter.limit(RATE_LIMIT_REGISTER)
+@_rate_limit(RATE_LIMIT_REGISTER)
 async def register(
 	request: Request,
 	body: RegisterRequest,
 	db: Annotated[AsyncSession, Depends(get_db)],
 	redis: Annotated[Redis, Depends(get_redis)],
-) -> RegisterResponse:
+) -> RegisterResponse | JSONResponse:
 	# FMEA S05: honeypot check — silently swallow bot registrations without
 	# creating an account. Returning 201 means the bot thinks it succeeded and
 	# won't retry or enumerate errors; legitimate clients never fill 'website'.
 	if body.website:
 		log.warning("auth.register.honeypot_triggered", email_prefix=str(body.email)[:8])
-		from fastapi.responses import JSONResponse
 		return JSONResponse(status_code=201, content={"user": {}, "tokens": {}})
 
 	svc = AuthService(db, redis)
@@ -161,7 +171,7 @@ async def register(
 	status_code=status.HTTP_200_OK,
 	summary="Login with email and password",
 )
-@limiter.limit(RATE_LIMIT_LOGIN)
+@_rate_limit(RATE_LIMIT_LOGIN)
 async def login(
 	request: Request,
 	body: LoginRequest,
@@ -182,7 +192,7 @@ async def login(
 	status_code=status.HTTP_200_OK,
 	summary="Exchange refresh token for a new access token",
 )
-@limiter.limit(RATE_LIMIT_REFRESH)
+@_rate_limit(RATE_LIMIT_REFRESH)
 async def refresh_token(
 	request: Request,
 	body: RefreshRequest,
@@ -238,7 +248,7 @@ async def verify_email(
 	status_code=status.HTTP_200_OK,
 	summary="Request a password reset email",
 )
-@limiter.limit("5/hour")
+@_rate_limit("5/hour")
 async def forgot_password(
 	request: Request,
 	body: ForgotPasswordRequest,
@@ -252,9 +262,8 @@ async def forgot_password(
 	if reset_token:
 		reset_url = f"{settings.frontend_url}/reset-password?token={reset_token}"
 		from sqlalchemy import select
-		result = await db.execute(
-			select(User).where(User.email == str(body.email).lower())
-		)
+
+		result = await db.execute(select(User).where(User.email == str(body.email).lower()))
 		user = result.scalar_one_or_none()
 		if user:
 			enqueue_password_reset_email(user.id, reset_url)
@@ -269,7 +278,7 @@ async def forgot_password(
 	status_code=status.HTTP_200_OK,
 	summary="Reset password using token from email",
 )
-@limiter.limit(RATE_LIMIT_LOGIN)
+@_rate_limit(RATE_LIMIT_LOGIN)
 async def reset_password(
 	request: Request,
 	body: ResetPasswordRequest,
@@ -300,6 +309,7 @@ async def google_oauth_start() -> RedirectResponse:
 		"access_type": "offline",
 	}
 	from urllib.parse import urlencode
+
 	url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 	return RedirectResponse(url=url)
 
@@ -342,7 +352,10 @@ async def google_oauth_callback(
 		if userinfo_resp.status_code != 200:
 			raise HTTPException(
 				status_code=status.HTTP_400_BAD_REQUEST,
-				detail={"error_code": "AUTHENTICATION_ERROR", "message": "Failed to fetch Google profile"},
+				detail={
+					"error_code": "AUTHENTICATION_ERROR",
+					"message": "Failed to fetch Google profile",
+				},
 			)
 		userinfo = userinfo_resp.json()
 

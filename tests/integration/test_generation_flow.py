@@ -3,28 +3,26 @@
 Uses real DB session (transactional rollback) + fakeredis + a mock ML client
 that avoids real network calls.  No mock objects for DB or Redis.
 """
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from gbedu_core._uuid7 import uuid7str
 from gbedu_core.models import (
 	GenerationJob,
 	JobStatus,
-	Language,
-	SubGenre,
 	User,
 )
-
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 async def _create_job(
 	session: AsyncSession,
@@ -50,7 +48,8 @@ async def _get_job(session: AsyncSession, job_id: str) -> GenerationJob | None:
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-async def test_job_created_in_db(test_db_session: AsyncSession, make_user):
+
+async def test_job_created_in_db(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="creator")
 	job = await _create_job(test_db_session, user)
 
@@ -61,7 +60,7 @@ async def test_job_created_in_db(test_db_session: AsyncSession, make_user):
 	assert fetched.progress_percent == 0
 
 
-async def test_job_status_transitions(test_db_session: AsyncSession, make_user):
+async def test_job_status_transitions(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="pro")
 	job = await _create_job(test_db_session, user)
 
@@ -80,7 +79,7 @@ async def test_job_status_transitions(test_db_session: AsyncSession, make_user):
 		assert fetched.status == status, f"Expected {status}, got {fetched.status}"
 
 
-async def test_job_failure_records_error(test_db_session: AsyncSession, make_user):
+async def test_job_failure_records_error(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	job = await _create_job(test_db_session, user)
 
@@ -96,7 +95,7 @@ async def test_job_failure_records_error(test_db_session: AsyncSession, make_use
 	assert fetched.is_terminal is True
 
 
-async def test_job_celery_task_id_stored(test_db_session: AsyncSession, make_user):
+async def test_job_celery_task_id_stored(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="creator")
 	job = await _create_job(test_db_session, user)
 
@@ -110,7 +109,7 @@ async def test_job_celery_task_id_stored(test_db_session: AsyncSession, make_use
 	assert fetched.celery_task_id == fake_task_id
 
 
-async def test_multiple_jobs_same_user(test_db_session: AsyncSession, make_user):
+async def test_multiple_jobs_same_user(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user(tier="pro")
 
 	job_ids = []
@@ -126,7 +125,7 @@ async def test_multiple_jobs_same_user(test_db_session: AsyncSession, make_user)
 	assert {j.id for j in jobs} == set(job_ids)
 
 
-async def test_job_progress_update(test_db_session: AsyncSession, make_user):
+async def test_job_progress_update(test_db_session: AsyncSession, make_user) -> None:
 	user = await make_user()
 	job = await _create_job(test_db_session, user)
 
@@ -144,7 +143,7 @@ async def test_job_with_track_link(
 	make_user,
 	make_track,
 	make_job,
-):
+) -> None:
 	user = await make_user()
 	track = await make_track(user)
 	job = await make_job(user, track=track, status="complete")
@@ -158,7 +157,7 @@ async def test_celery_task_enqueue_simulated(
 	test_db_session: AsyncSession,
 	test_redis: object,
 	make_user,
-):
+) -> None:
 	"""Verify that a Celery task dispatch is recorded when the worker module
 	is called.  We patch the actual Celery apply_async to avoid a real broker.
 	"""

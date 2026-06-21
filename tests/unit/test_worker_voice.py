@@ -6,13 +6,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
-
 from gbedu_core.models.voice import VoiceModelStatus
 
-
 # ── helpers ───────────────────────────────────────────────────────────────
+
 
 def _make_vm(
 	vm_id: str = "vm-1",
@@ -23,7 +21,13 @@ def _make_vm(
 	vm = MagicMock()
 	vm.id = vm_id
 	vm.status = status
-	vm.training_audio_urls = [] if no_audio else (training_audio_urls if training_audio_urls is not None else ["https://r2/sample1.mp3"])
+	vm.training_audio_urls = (
+		[]
+		if no_audio
+		else (
+			training_audio_urls if training_audio_urls is not None else ["https://r2/sample1.mp3"]
+		)
+	)
 	vm.training_config = {"epochs": 10}
 	vm.training_task_id = None
 	vm.training_progress_percent = 0
@@ -53,6 +57,7 @@ def _make_session(get_returns: list[Any]) -> tuple[MagicMock, Any]:
 
 
 # ── _run_training ─────────────────────────────────────────────────────────
+
 
 async def test_run_training_model_not_found_raises() -> None:
 	from gbedu_worker.tasks.voice import _run_training
@@ -120,12 +125,17 @@ async def test_run_training_ml_service_error_raises() -> None:
 	with (
 		patch("gbedu_worker.tasks.voice.get_async_session", ctx),
 		patch("httpx.AsyncClient", return_value=mock_client),
-		patch("gbedu_worker.tasks.voice.get_settings", MagicMock(return_value=MagicMock(
-			ml=MagicMock(service_url="http://ml:8001", service_api_key="key"),
-		))),
+		patch(
+			"gbedu_worker.tasks.voice.get_settings",
+			MagicMock(
+				return_value=MagicMock(
+					ml=MagicMock(service_url="http://ml:8001", service_api_key="key"),
+				)
+			),
+		),
+		pytest.raises(RuntimeError, match="HTTP 500"),
 	):
-		with pytest.raises(RuntimeError, match="HTTP 500"):
-			await _run_training("vm-1", "task-1")
+		await _run_training("vm-1", "task-1")
 
 
 async def test_run_training_happy_path() -> None:
@@ -151,9 +161,14 @@ async def test_run_training_happy_path() -> None:
 	with (
 		patch("gbedu_worker.tasks.voice.get_async_session", ctx),
 		patch("httpx.AsyncClient", return_value=mock_client),
-		patch("gbedu_worker.tasks.voice.get_settings", MagicMock(return_value=MagicMock(
-			ml=MagicMock(service_url="http://ml:8001", service_api_key="key"),
-		))),
+		patch(
+			"gbedu_worker.tasks.voice.get_settings",
+			MagicMock(
+				return_value=MagicMock(
+					ml=MagicMock(service_url="http://ml:8001", service_api_key="key"),
+				)
+			),
+		),
 	):
 		result = await _run_training("vm-1", "task-1")
 
@@ -163,6 +178,7 @@ async def test_run_training_happy_path() -> None:
 
 
 # ── _mark_failed ──────────────────────────────────────────────────────────
+
 
 async def test_mark_failed_updates_status() -> None:
 	from gbedu_worker.tasks.voice import _mark_failed

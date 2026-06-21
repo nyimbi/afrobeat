@@ -4,12 +4,13 @@ pytest.ini settings live in the root pyproject.toml:
   [tool.pytest.ini_options]
   asyncio_mode = "auto"
 """
+
 from __future__ import annotations
 
-import asyncio
+import getpass
 import os
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import fakeredis.aioredis
@@ -24,8 +25,6 @@ from sqlalchemy.ext.asyncio import (
 	create_async_engine,
 )
 
-import getpass
-
 _DB_USER = getpass.getuser()
 
 # Ensure test env is set before any settings are constructed
@@ -35,20 +34,32 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("GBEDU_ML_API_KEY", "test-ml-internal-api-key")
 
+from gbedu_core._uuid7 import uuid7str
 from gbedu_core.config import Settings
-from gbedu_core.db import Base, make_session_factory
+from gbedu_core.db import Base
 from gbedu_core.models import (  # noqa: F401 — register all mappers
-	User, Track, GenerationJob, Subscription, Payment, Invoice,
-	VoiceModel, BeatListing, BeatPurchase,
-	SubscriptionTier, SubscriptionStatus,
-	SubGenre, Language, TrackStatus,
-	JobStatus, PaymentProvider, PaymentStatus,
+	BeatListing,
+	BeatPurchase,
+	GenerationJob,
+	Invoice,
+	JobStatus,
+	Language,
+	Payment,
+	PaymentProvider,
+	PaymentStatus,
+	SubGenre,
+	Subscription,
+	SubscriptionStatus,
+	SubscriptionTier,
+	Track,
+	TrackStatus,
+	User,
+	VoiceModel,
 )
 from gbedu_core.security import hash_password
-from gbedu_core._uuid7 import uuid7str
-
 
 # ── Settings fixture ───────────────────────────────────────────────────────────
+
 
 @pytest.fixture(scope="session")
 def test_settings() -> Settings:
@@ -63,6 +74,7 @@ def test_settings() -> Settings:
 
 
 # ── Database engine + schema ───────────────────────────────────────────────────
+
 
 @pytest_asyncio.fixture(scope="session")
 async def test_db_engine(test_settings: Settings) -> AsyncGenerator[AsyncEngine, None]:
@@ -87,6 +99,7 @@ async def test_db_engine(test_settings: Settings) -> AsyncGenerator[AsyncEngine,
 
 
 # ── Per-test transactional session (fast — rolls back after each test) ─────────
+
 
 @pytest_asyncio.fixture
 async def test_db_session(test_db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
@@ -119,6 +132,7 @@ async def test_db_session(test_db_engine: AsyncEngine) -> AsyncGenerator[AsyncSe
 
 # ── Redis fixture (fakeredis — no real Redis required in unit tests) ───────────
 
+
 @pytest_asyncio.fixture
 async def test_redis() -> AsyncGenerator[fakeredis.aioredis.FakeRedis, None]:
 	"""In-memory Redis substitute — isolated per test."""
@@ -129,14 +143,17 @@ async def test_redis() -> AsyncGenerator[fakeredis.aioredis.FakeRedis, None]:
 
 # ── HTTP test client ───────────────────────────────────────────────────────────
 
+
 @pytest_asyncio.fixture
-async def test_client(test_db_session: AsyncSession, test_redis: Any) -> AsyncGenerator[httpx.AsyncClient, None]:
+async def test_client(
+	test_db_session: AsyncSession, test_redis: Any
+) -> AsyncGenerator[httpx.AsyncClient, None]:
 	"""httpx AsyncClient wired to the FastAPI app with DB/Redis overrides.
 
 	Import is deferred so tests that don't need the API don't import FastAPI.
 	"""
-	from services.api.main import create_app  # type: ignore[import]
 	from gbedu_core.db import get_db
+	from services.api.main import create_app  # type: ignore[import]
 
 	app = create_app()
 	app.dependency_overrides[get_db] = lambda: test_db_session
@@ -150,9 +167,11 @@ async def test_client(test_db_session: AsyncSession, test_redis: Any) -> AsyncGe
 
 # ── Factory fixtures ───────────────────────────────────────────────────────────
 
+
 @pytest_asyncio.fixture
 async def make_user(test_db_session: AsyncSession):
 	"""Factory: make_user(tier="free") → User (persisted, not committed)."""
+
 	async def _factory(
 		tier: str = "free",
 		email: str | None = None,
@@ -170,7 +189,7 @@ async def make_user(test_db_session: AsyncSession):
 			is_verified=is_verified,
 			preferred_language="en",
 			generation_count_today=0,
-			generation_count_reset_at=datetime.now(timezone.utc),
+			generation_count_reset_at=datetime.now(UTC),
 		)
 		test_db_session.add(user)
 		await test_db_session.flush()
@@ -182,6 +201,7 @@ async def make_user(test_db_session: AsyncSession):
 @pytest_asyncio.fixture
 async def make_track(test_db_session: AsyncSession):
 	"""Factory: make_track(user) → Track (persisted, not committed)."""
+
 	async def _factory(user: User, status: str = "ready") -> Track:
 		track = Track(
 			id=uuid7str(),
@@ -205,6 +225,7 @@ async def make_track(test_db_session: AsyncSession):
 @pytest_asyncio.fixture
 async def make_job(test_db_session: AsyncSession):
 	"""Factory: make_job(user, track) → GenerationJob (persisted, not committed)."""
+
 	async def _factory(
 		user: User,
 		track: Track | None = None,

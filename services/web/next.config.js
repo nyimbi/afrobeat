@@ -2,6 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
+  typedRoutes: true,
 
   images: {
     remotePatterns: [
@@ -33,10 +34,6 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
     NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY:
       process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
-  },
-
-  experimental: {
-    typedRoutes: true,
   },
 
   async headers() {
