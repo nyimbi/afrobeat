@@ -993,21 +993,6 @@ wheels = [
 ]
 
 [[package]]
-name = "essentia"
-version = "2.1b6.dev1438"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pyyaml" },
-    { name = "six" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/b3/26c54a8fd03b0378574767e4e9fda3ad41f68dba95649e346e9895d236bd/essentia-2.1b6.dev1438-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:3a4a51f7b59d76b9beb9a1aacdaa9b9c0de89f14b02ab45050f86230241044c5", size = 20494034, upload-time = "2026-05-19T16:25:49.379Z" },
-    { url = "https://files.pythonhosted.org/packages/af/eb/e823082c6e9a048597c4dfc4aecc8dde4becf99050c78cdbe117e500ec33/essentia-2.1b6.dev1438-cp314-cp314-macosx_15_0_x86_64.whl", hash = "sha256:b387e374008ab3e8f72fbc93d0c91c7fde97da71d26598f19a84750ff870582b", size = 22552441, upload-time = "2026-05-19T16:25:53.489Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/dc/feafca6d0989e40a324b5e977054ec1eb7a7d93260e023b4e5c5071202c7/essentia-2.1b6.dev1438-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1ee6107fe63fb3b50f8aa68466951f6ca1e162a700d8deffd46ab0506dab9acb", size = 14104978, upload-time = "2026-05-19T16:25:56.314Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.137.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1183,7 +1168,6 @@ version = "0.1.0"
 source = { editable = "libs/audio" }
 dependencies = [
     { name = "demucs" },
-    { name = "essentia" },
     { name = "ffmpeg-python" },
     { name = "gbedu-core" },
     { name = "librosa" },
@@ -1200,7 +1184,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "demucs", specifier = ">=4.0" },
-    { name = "essentia", specifier = ">=2.1b6.dev1110" },
     { name = "ffmpeg-python", specifier = ">=0.2" },
     { name = "gbedu-core", editable = "libs/core" },
     { name = "librosa", specifier = ">=0.10" },

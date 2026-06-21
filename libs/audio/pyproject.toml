@@ -21,8 +21,6 @@ dependencies = [
 	"numpy>=1.26",
 	"scipy>=1.13",
 	"ffmpeg-python>=0.2",
-	# essentia ships pre-built wheels from their own index
-	"essentia>=2.1b6.dev1110",
 ]
 
 [project.optional-dependencies]
@@ -35,11 +33,6 @@ packages = ["src/gbedu_audio"]
 
 [tool.uv.sources]
 gbedu-core = { workspace = true }
-
-[[tool.uv.index]]
-name = "essentia"
-url = "https://essentia.upf.edu/python-wheels/"
-explicit = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
