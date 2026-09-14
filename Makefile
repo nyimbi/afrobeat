@@ -1,4 +1,4 @@
-.PHONY: install dev test test-unit test-integration lint typecheck format migrate build docker-up docker-down clean
+.PHONY: install dev test test-unit test-integration test-web lint typecheck format migrate build docker-up docker-down clean
 
 PYTHON := uv run python
 UV := uv
@@ -24,6 +24,9 @@ test-integration:
 
 test-cov:
 	$(UV) run pytest --cov=libs --cov=services --cov-report=html --cov-report=term-missing
+
+test-web:
+	cd services/web && npm test
 
 # ── Code quality ──────────────────────────────────────────────────────────────
 

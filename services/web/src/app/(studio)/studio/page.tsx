@@ -28,6 +28,7 @@ import { cn, subGenreLabel, languageFlag, formatDuration } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { SubGenre, Language, LyricsMode } from "@/lib/types"
 import { LyricsStage } from "@/components/studio/lyrics-stage"
+import { VoiceSelector } from "@/components/studio/voice-selector"
 import { resolveApprovedLyrics } from "@/lib/lyrics"
 
 // ---- Static options ----
@@ -152,7 +153,8 @@ export default function StudioPage() {
 	const [duration, setDuration] = useState<30 | 60 | 120 | 210>(60)
 	const [showAdvanced, setShowAdvanced] = useState(false)
 	const [bpmOverride, setBpmOverride] = useState<string>("")
-	const [voiceModelId] = useState<string | null>(null)
+	const [voiceModelId, setVoiceModelId] = useState<string | null>(null)
+	const canCloneVoice = user?.subscriptionTier === "pro" || user?.subscriptionTier === "label"
 	const [lyricsMode, setLyricsMode] = useState<LyricsMode>("ai")
 	const [lyricsText, setLyricsText] = useState("")
 	const [renditionCount, setRenditionCount] = useState<1 | 2 | 3>(1)
@@ -461,6 +463,17 @@ export default function StudioPage() {
 												max={200}
 												placeholder="e.g. 120"
 												className="w-full px-3 py-2 rounded-lg bg-dark-bg-elevated border border-white/[0.08] text-sm text-zinc-100 placeholder:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-afro-gold/50 font-mono disabled:opacity-50"
+											/>
+										</div>
+										{/* Voice — AI, preset, or cloned */}
+										<div className="space-y-1.5">
+											<SectionLabel>Vocal voice</SectionLabel>
+											<VoiceSelector
+												disabled={isGenerating}
+												value={voiceModelId}
+												onChange={setVoiceModelId}
+												canClone={canCloneVoice}
+												onUpgradeRequired={() => setShowUpgrade(true)}
 											/>
 										</div>
 									</div>

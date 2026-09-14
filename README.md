@@ -410,6 +410,7 @@ make test-unit          # tests/unit/ + libs tests — fast, no containers
 make test-integration   # needs docker-up-infra
 make test               # everything
 make test-cov           # with HTML coverage report in htmlcov/
+make test-web           # frontend vitest suite (services/web)
 ```
 
 ### Specific subsets
