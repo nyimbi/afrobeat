@@ -27,6 +27,7 @@ function req(overrides: Partial<GenerationRequest> = {}): GenerationRequest {
 		voiceModelId: null,
 		lyrics: null,
 		seed: null,
+		referenceAudioKey: null,
 		...overrides,
 	}
 }

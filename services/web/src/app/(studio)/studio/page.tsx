@@ -28,6 +28,7 @@ import { cn, subGenreLabel, languageFlag, formatDuration } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { SubGenre, Language, LyricsMode } from "@/lib/types"
 import { LyricsStage } from "@/components/studio/lyrics-stage"
+import { ReferenceUpload } from "@/components/studio/reference-upload"
 import { VoiceSelector } from "@/components/studio/voice-selector"
 import { resolveApprovedLyrics } from "@/lib/lyrics"
 
@@ -158,6 +159,8 @@ export default function StudioPage() {
 	const [lyricsMode, setLyricsMode] = useState<LyricsMode>("ai")
 	const [lyricsText, setLyricsText] = useState("")
 	const [renditionCount, setRenditionCount] = useState<1 | 2 | 3>(1)
+	const [referenceKey, setReferenceKey] = useState<string | null>(null)
+	const [referenceFileName, setReferenceFileName] = useState<string | null>(null)
 
 	const approvedLyrics = resolveApprovedLyrics(lyricsMode, lyricsText)
 
@@ -185,13 +188,14 @@ export default function StudioPage() {
 			voiceModelId,
 			lyrics: approvedLyrics,
 			seed: null,
+			referenceAudioKey: referenceKey,
 		}
 		if (renditionCount > 1) {
 			await submitRenditions(req, renditionCount)
 		} else {
 			await submitGeneration(req)
 		}
-	}, [prompt, subGenre, language, energy, duration, bpmOverride, voiceModelId, approvedLyrics, renditionCount, submitGeneration, submitRenditions])
+	}, [prompt, subGenre, language, energy, duration, bpmOverride, voiceModelId, approvedLyrics, renditionCount, referenceKey, submitGeneration, submitRenditions])
 
 	const handleDownload = useCallback(async () => {
 		if (!currentTrack) return
@@ -331,6 +335,20 @@ export default function StudioPage() {
 									</p>
 								)}
 							</div>
+
+							<ReferenceUpload
+								disabled={isGenerating}
+								referenceKey={referenceKey}
+								fileName={referenceFileName}
+								onAttached={(key, fileName) => {
+									setReferenceKey(key)
+									setReferenceFileName(fileName)
+								}}
+								onCleared={() => {
+									setReferenceKey(null)
+									setReferenceFileName(null)
+								}}
+							/>
 
 							{/* Sub-genre — grouped by region */}
 							<div className="space-y-3">

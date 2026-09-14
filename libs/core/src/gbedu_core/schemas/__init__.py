@@ -147,6 +147,10 @@ class GenerationRequest(BaseModel):
 	lyrics: str | None = Field(default=None, min_length=1, max_length=5000)
 	# Optional RNG seed for reproducible / varied renditions.
 	seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+	# Optional R2 key of a user-uploaded reference track
+	# (reference-samples/{user_id}/...). The worker analyses it for tempo/key
+	# and steers generation toward its feel.
+	reference_audio_key: str | None = Field(default=None, min_length=1, max_length=1024)
 
 	@field_validator("prompt")
 	@classmethod
@@ -161,6 +165,16 @@ class GenerationRequest(BaseModel):
 		stripped = v.strip()
 		if not stripped:
 			raise ValueError("lyrics must not be blank — omit the field for AI lyrics")
+		return stripped
+
+	@field_validator("reference_audio_key")
+	@classmethod
+	def strip_reference_audio_key(cls, v: str | None) -> str | None:
+		if v is None:
+			return None
+		stripped = v.strip()
+		if not stripped:
+			raise ValueError("reference_audio_key must not be blank — omit the field for no reference")
 		return stripped
 
 

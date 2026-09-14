@@ -36,6 +36,7 @@ class GenerationRequest:
 		duration_seconds: int = 30,
 		lyrics: str | None = None,
 		seed: int | None = None,
+		reference_audio_key: str | None = None,
 	) -> None:
 		assert prompt, "prompt must not be empty"
 		self.prompt = prompt
@@ -47,6 +48,7 @@ class GenerationRequest:
 		self.duration_seconds = duration_seconds
 		self.lyrics = lyrics
 		self.seed = seed
+		self.reference_audio_key = reference_audio_key
 
 	def to_dict(self) -> dict[str, Any]:
 		return {
@@ -59,6 +61,7 @@ class GenerationRequest:
 			"duration_seconds": self.duration_seconds,
 			"lyrics": self.lyrics,
 			"seed": self.seed,
+			"reference_audio_key": self.reference_audio_key,
 		}
 
 

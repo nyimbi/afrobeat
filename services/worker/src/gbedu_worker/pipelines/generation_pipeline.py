@@ -66,6 +66,57 @@ _IDEMPOTENCY_TTL = 86_400
 _CHECKPOINT_TTL = 7_200
 _CHECKPOINT_PREFIX = "pipeline_ckpt:"
 
+# ML-service GenerationRequest BPM bounds (libs/core schemas). Measured
+# reference tempos are clamped into this range — never forwarded raw, which
+# would 422 the ML call.
+_ML_BPM_MIN = 80
+_ML_BPM_MAX = 130
+
+
+def describe_reference(analysis: dict[str, Any]) -> str:
+	"""One-line human summary of reference-track analysis for progress UI."""
+	bpm = analysis.get("bpm")
+	key = analysis.get("key") or "unknown key"
+	if bpm is None:
+		return f"key of {key}"
+	return f"~{round(float(bpm))} BPM in {key}"
+
+
+def apply_reference_steering(
+	payload: dict[str, Any], analysis: dict[str, Any]
+) -> dict[str, Any]:
+	"""Steer an ML payload toward a reference track's measured character.
+
+	Pure function (no I/O) so it is unit-testable:
+	- User-set BPM always wins; otherwise the measured tempo is applied,
+	  clamped to ML bounds.
+	- The ML prompt is augmented with a short character sentence. The DB
+	  `prompt_used` is untouched — only the ML-bound copy changes.
+	"""
+	out = dict(payload)
+
+	measured_bpm = analysis.get("bpm")
+	if out.get("bpm") is None and isinstance(measured_bpm, (int, float)):
+		clamped = max(_ML_BPM_MIN, min(_ML_BPM_MAX, round(float(measured_bpm))))
+		out["bpm"] = clamped
+
+	key = analysis.get("key")
+	energy = analysis.get("energy")
+	character_bits: list[str] = []
+	if isinstance(measured_bpm, (int, float)):
+		character_bits.append(f"{round(float(measured_bpm))}-BPM groove")
+	if isinstance(key, str) and key:
+		character_bits.append(f"in {key}")
+	if isinstance(energy, (int, float)):
+		character_bits.append(f"energy {round(float(energy))}/10")
+	if character_bits:
+		out["prompt"] = (
+			f"{out.get('prompt', '')}\nReference track character: "
+			f"{', '.join(character_bits)} — match its tempo, key, and feel."
+		)
+	return out
+
+
 # Per-stage wall-clock deadlines (FMEA M05).
 # ml_generate covers 3 tenacity retries × 300 s each + 2 × 270 s backoff ≈ 1440 s.
 # Values are conservative upper bounds; a hung stage is forced to fail instead of
@@ -216,9 +267,21 @@ class GenerationPipelineOrchestrator:
 					"voice_model_id",
 					"lyrics",
 					"seed",
+					"reference_audio_key",
 				)
 			},
 		}
+
+		reference_key = job.metadata_.get("reference_audio_key")
+		if reference_key:
+			analysis = await self._resolve_reference(reference_key, job)
+			payload = apply_reference_steering(payload, analysis)
+			job.metadata_ = {**job.metadata_, "reference_analysis": analysis}
+			self._session.add(job)
+			await self._session.flush()
+			detected = describe_reference(analysis)
+			await self._publish_progress(8, f"Reference detected: {detected}")
+			self._log.info("reference.steering_applied", analysis=analysis)
 
 		self._log.info("calling ml service", url=_ml_settings.service_url)
 
@@ -256,6 +319,35 @@ class GenerationPipelineOrchestrator:
 		await self._update_status(job, JobStatus.ml_generating, progress=40)
 		await self._publish_progress(40, "ML generation complete")
 		return result
+
+	async def _resolve_reference(self, key: str, job: GenerationJob) -> dict[str, Any]:
+		"""Download a reference track from R2 and analyse tempo/key/energy."""
+		from gbedu_worker.storage import R2Client  # type: ignore[import]
+
+		r2 = R2Client(settings=_storage_settings)
+		url = await r2.generate_presigned_url(key=key, expires_in=600)
+		async with httpx.AsyncClient(timeout=120) as client:
+			resp = await client.get(url)
+			resp.raise_for_status()
+			data = resp.content
+
+		with tempfile.TemporaryDirectory(prefix="gbedu_ref_") as tmpdir:
+			ref_path = Path(tmpdir) / "reference"
+			ref_path.write_bytes(data)
+
+			from gbedu_audio.analysis import AudioAnalyzer  # type: ignore[import]
+
+			analyzer = AudioAnalyzer()
+			features = await analyzer.extract_features(ref_path)
+
+		analysis = {
+			"bpm": features.get("bpm"),
+			"key": features.get("key"),
+			"energy": features.get("energy"),
+			"duration_seconds": features.get("duration_seconds"),
+		}
+		self._log.info("reference.analysed", key=key, analysis=analysis)
+		return analysis
 
 	async def _mirror_ml_progress(self, job: GenerationJob) -> None:  # pragma: no cover
 		"""Relay ML pub/sub progress into job.progress_percent (5→40% band).

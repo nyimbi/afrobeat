@@ -4,7 +4,8 @@ from collections.abc import Callable
 from typing import Annotated, Any, cast
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from gbedu_core._uuid7 import uuid7str
 from gbedu_core.errors import GbeduError
 from gbedu_core.models.job import GenerationJob
 from gbedu_core.models.track import Language, SubGenre
@@ -13,10 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gbedu_api.config import RATE_LIMIT_FREE
-from gbedu_api.deps import get_current_active_user, get_db, get_redis, limiter
+from gbedu_api.config import MAX_UPLOAD_SIZE_BYTES, RATE_LIMIT_FREE
+from gbedu_api.deps import get_current_active_user, get_db, get_redis, get_storage, limiter
 from gbedu_api.services.generation_service import GenerationService
 from gbedu_api.services.ml_client import GenerationRequest
+from gbedu_api.services.storage_service import StorageClient
 
 log = structlog.get_logger(__name__)
 
@@ -43,6 +45,10 @@ class GenerationCreateRequest(BaseModel):
 	lyrics: str | None = Field(default=None, min_length=1, max_length=5000)
 	# Optional RNG seed — same prompt + same seed reproduces a rendition.
 	seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+	# Optional R2 key from POST /generations/reference — steers tempo/key/feel.
+	reference_audio_key: str | None = Field(
+		default=None, min_length=1, max_length=1024, validation_alias="referenceAudioKey"
+	)
 
 	@field_validator("lyrics")
 	@classmethod
@@ -52,6 +58,16 @@ class GenerationCreateRequest(BaseModel):
 		stripped = v.strip()
 		if not stripped:
 			raise ValueError("lyrics must not be blank — omit the field for AI lyrics")
+		return stripped
+
+	@field_validator("reference_audio_key")
+	@classmethod
+	def strip_reference_audio_key(cls, v: str | None) -> str | None:
+		if v is None:
+			return None
+		stripped = v.strip()
+		if not stripped:
+			raise ValueError("reference_audio_key must not be blank — omit the field for no reference")
 		return stripped
 
 
@@ -82,6 +98,20 @@ class PaginatedJobsResponse(BaseModel):
 class CancelResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 	message: str
+
+
+class ReferenceUploadResponse(BaseModel):
+	model_config = ConfigDict(extra="forbid")
+	key: str
+
+
+_REFERENCE_AUDIO_TYPES = {
+	"audio/mpeg",
+	"audio/wav",
+	"audio/flac",
+	"audio/x-wav",
+	"audio/ogg",
+}
 
 
 _STATUS_MESSAGES: dict[str, str] = {
@@ -133,6 +163,17 @@ async def submit_generation(
 	db: Annotated[AsyncSession, Depends(get_db)],
 	redis: Annotated[Redis, Depends(get_redis)],
 ) -> GenerationJobResponse:
+	if body.reference_audio_key is not None and not body.reference_audio_key.startswith(
+		f"reference-samples/{user.id}/"
+	):
+		raise HTTPException(
+			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			detail={
+				"error_code": "VALIDATION_ERROR",
+				"message": "reference_audio_key must be a key issued to you via POST /generations/reference",
+			},
+		)
+
 	gen_request = GenerationRequest(
 		prompt=body.prompt,
 		sub_genre=body.sub_genre.value,
@@ -143,6 +184,7 @@ async def submit_generation(
 		duration_seconds=body.duration_seconds,
 		lyrics=body.lyrics,
 		seed=body.seed,
+		reference_audio_key=body.reference_audio_key,
 	)
 
 	svc = GenerationService(db, redis)
@@ -155,6 +197,63 @@ async def submit_generation(
 	resp["statusMessage"] = _STATUS_MESSAGES.get(job.status.value, "")
 	resp["estimatedSeconds"] = _estimate_seconds(body.duration_seconds)
 	return resp
+
+
+@router.post(
+	"/reference",
+	response_model=ReferenceUploadResponse,
+	status_code=status.HTTP_202_ACCEPTED,
+	summary="Upload a reference track to steer a generation",
+)
+@_rate_limit(RATE_LIMIT_FREE)
+async def upload_reference_track(
+	request: Request,
+	file: UploadFile,
+	user: Annotated[User, Depends(get_current_active_user)],
+	storage: Annotated[StorageClient, Depends(get_storage)],
+) -> ReferenceUploadResponse:
+	"""Store a user-supplied beat/song; returns a key for `referenceAudioKey`.
+
+	The worker analyses tempo/key/energy from the file at generation time.
+	"""
+	if file.content_type not in _REFERENCE_AUDIO_TYPES:
+		raise HTTPException(
+			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			detail={
+				"error_code": "VALIDATION_ERROR",
+				"message": f"Unsupported audio type {file.content_type}. Use MP3, WAV, FLAC, or OGG.",
+			},
+		)
+
+	content = await file.read()
+	if len(content) > MAX_UPLOAD_SIZE_BYTES:
+		raise HTTPException(
+			status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+			detail={
+				"error_code": "VALIDATION_ERROR",
+				"message": f"File exceeds {MAX_UPLOAD_SIZE_BYTES // 1024 // 1024}MB limit",
+			},
+		)
+
+	ext = (file.filename or "audio.wav").rsplit(".", 1)[-1].lower()
+	key = f"reference-samples/{user.id}/{uuid7str()}/ref.{ext}"
+
+	import tempfile
+	from pathlib import Path
+
+	with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+		tmp.write(content)
+		tmp_path = Path(tmp.name)
+
+	try:
+		await storage.upload_audio(tmp_path, key, content_type=file.content_type)
+	except GbeduError as exc:
+		raise HTTPException(status_code=exc.http_status, detail=exc.to_dict())
+	finally:
+		tmp_path.unlink(missing_ok=True)
+
+	log.info("generation.reference.uploaded", key=key, user_id=user.id)
+	return ReferenceUploadResponse(key=key)
 
 
 @router.get(

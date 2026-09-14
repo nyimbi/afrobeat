@@ -211,6 +211,16 @@ export const api = {
 			await apiClient.delete(`/generations/${jobId}`)
 		},
 
+		async uploadReference(file: File): Promise<{ key: string }> {
+			const form = new FormData()
+			form.append("file", file)
+			const res = await apiClient.post<{ key: string }>("/generations/reference", form, {
+				headers: { "Content-Type": "multipart/form-data" },
+				timeout: 120_000,
+			})
+			return res.data
+		},
+
 		async getTracks(params: { page?: number; pageSize?: number; subGenre?: string | undefined; language?: string | undefined; search?: string | undefined } = {}): Promise<PaginatedResponse<Track>> {
 			const res = await apiClient.get<PaginatedResponse<Track>>("/tracks", { params })
 			return res.data

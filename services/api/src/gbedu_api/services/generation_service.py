@@ -103,6 +103,7 @@ class GenerationService:
 				"duration_seconds": request.duration_seconds,
 				"lyrics": request.lyrics,
 				"seed": request.seed,
+				"reference_audio_key": request.reference_audio_key,
 			},
 		)
 		self._db.add(job)

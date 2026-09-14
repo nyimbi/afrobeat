@@ -139,6 +139,8 @@ export interface GenerationRequest {
 	lyrics: string | null
 	// Optional RNG seed — same prompt + same seed reproduces a rendition.
 	seed: number | null
+	// Optional R2 key from the reference-track upload — steers tempo/key/feel.
+	referenceAudioKey: string | null
 }
 
 export interface Rendition {
