@@ -34,6 +34,8 @@ class GenerationRequest:
 		energy_level: int = 5,
 		voice_model_id: str | None = None,
 		duration_seconds: int = 30,
+		lyrics: str | None = None,
+		seed: int | None = None,
 	) -> None:
 		assert prompt, "prompt must not be empty"
 		self.prompt = prompt
@@ -43,6 +45,8 @@ class GenerationRequest:
 		self.energy_level = energy_level
 		self.voice_model_id = voice_model_id
 		self.duration_seconds = duration_seconds
+		self.lyrics = lyrics
+		self.seed = seed
 
 	def to_dict(self) -> dict[str, Any]:
 		return {
@@ -53,6 +57,8 @@ class GenerationRequest:
 			"energy_level": self.energy_level,
 			"voice_model_id": self.voice_model_id,
 			"duration_seconds": self.duration_seconds,
+			"lyrics": self.lyrics,
+			"seed": self.seed,
 		}
 
 
@@ -143,6 +149,49 @@ class MLServiceClient:
 			) from exc
 
 		return GenerationResponse(resp.json())
+
+	@_ml_retry
+	async def draft_lyrics(self, request: GenerationRequest) -> dict[str, Any]:
+		"""Request a lyric-only draft from the ML service (no audio).
+
+		Cheap and fast — used for pre-generation lyric exploration.
+		Returns the LyricResult dict verbatim.
+		"""
+		try:
+
+			async def _call() -> httpx.Response:
+				return await self._http.post("/lyrics/draft", json=request.to_dict())
+
+			protected_call = cast(Callable[[], Awaitable[httpx.Response]], self._circuit(_call))
+			resp = await protected_call()
+		except CircuitBreakerError as exc:
+			log.warning("ml_client.circuit_open", error=str(exc))
+			raise MLServiceError("ML service circuit breaker is open") from exc
+		except httpx.TimeoutException as exc:
+			log.error("ml_client.lyrics_timeout", prompt_len=len(request.prompt))
+			raise MLServiceTimeoutError() from exc
+		except httpx.HTTPError as exc:
+			log.error("ml_client.lyrics_http_error", error=str(exc))
+			raise MLServiceError(f"ML service HTTP error: {exc}") from exc
+
+		if resp.status_code == 503:
+			raise httpx.HTTPStatusError(
+				"ML service unavailable",
+				request=resp.request,
+				response=resp,
+			)
+
+		try:
+			resp.raise_for_status()
+		except httpx.HTTPStatusError as exc:
+			log.error(
+				"ml_client.lyrics_error_response", status=resp.status_code, body=resp.text[:512]
+			)
+			raise MLServiceError(
+				f"ML service returned {resp.status_code}: {resp.text[:256]}"
+			) from exc
+
+		return cast(dict[str, Any], resp.json())
 
 	async def get_health(self) -> bool:
 		"""Return True if the ML service is reachable and healthy."""

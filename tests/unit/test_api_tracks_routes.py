@@ -164,7 +164,7 @@ def test_list_my_tracks_pagination_clamps_page_size() -> None:
 	resp = client.get("/api/v1/tracks?page_size=999")
 
 	assert resp.status_code == 200
-	assert resp.json()["page_size"] == 100
+	assert resp.json()["pageSize"] == 100
 
 
 # ── GET /tracks/{track_id} ─────────────────────────────────────────────────────
@@ -369,5 +369,5 @@ def test_get_stems_creator_tier_returns_presigned_urls() -> None:
 
 	assert resp.status_code == 200
 	body = resp.json()
-	assert body["track_id"] == "track-test-001"
+	assert body["trackId"] == "track-test-001"
 	assert "drums" in body["stems"]

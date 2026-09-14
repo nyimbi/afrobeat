@@ -64,7 +64,11 @@ export default function RegisterPage() {
 				email: data.email,
 				password: data.password,
 			})
-			storeLogin(res.user, res.tokens)
+			// /auth/register returns only a UserSummary — hydrate the full
+			// profile before storing so credits/tier render correctly.
+			useAuthStore.getState().refreshTokens(res.tokens)
+			const profile = await api.auth.getMe()
+			storeLogin(profile, res.tokens)
 
 			// Also sign into NextAuth session
 			await signIn("credentials", {

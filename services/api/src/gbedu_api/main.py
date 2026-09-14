@@ -28,6 +28,7 @@ from gbedu_api.routers import (
 	contact,
 	generations,
 	health,
+	lyrics,
 	marketplace,
 	payments,
 	tracks,
@@ -195,6 +196,7 @@ def create_app() -> FastAPI:
 	app.include_router(auth.router, prefix=_prefix)
 	app.include_router(users.router, prefix=_prefix)
 	app.include_router(generations.router, prefix=_prefix)
+	app.include_router(lyrics.router, prefix=_prefix)
 	app.include_router(tracks.router, prefix=_prefix)
 	app.include_router(payments.router, prefix=_prefix)
 	app.include_router(marketplace.router, prefix=_prefix)

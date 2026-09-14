@@ -35,6 +35,11 @@ declare module "next-auth/jwt" {
 	}
 }
 
+function apiBase(): string {
+	const raw = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/+$/, "")
+	return raw.endsWith("/api/v1") ? raw : `${raw}/api/v1`
+}
+
 const authOptions: NextAuthOptions = {
 	providers: [
 		GoogleProvider({
@@ -51,9 +56,9 @@ const authOptions: NextAuthOptions = {
 			async authorize(credentials) {
 				if (!credentials?.email || !credentials?.password) return null
 
-				try {
-					const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-					const res = await fetch(`${apiUrl}/auth/login`, {
+			try {
+				const apiUrl = apiBase()
+				const res = await fetch(`${apiUrl}/auth/login`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
@@ -64,19 +69,35 @@ const authOptions: NextAuthOptions = {
 
 					if (!res.ok) return null
 
-					const data = await res.json() as {
-						user: { id: string; email: string; fullName: string; avatarUrl: string | null; subscriptionTier: SubscriptionTier }
-						tokens: { accessToken: string; refreshToken: string; expiresAt: number }
+					// POST /auth/login returns TokenResponse (no user object) —
+					// fetch the profile from GET /users/me to hydrate the session.
+					const tokens = (await res.json()) as {
+						accessToken: string
+						refreshToken: string
+						tokenType: string
+						expiresAt: number
+					}
+
+					const profileRes = await fetch(`${apiUrl}/users/me`, {
+						headers: { Authorization: `Bearer ${tokens.accessToken}` },
+					})
+					if (!profileRes.ok) return null
+					const user = (await profileRes.json()) as {
+						id: string
+						email: string
+						fullName: string
+						avatarUrl: string | null
+						subscriptionTier: SubscriptionTier
 					}
 
 					return {
-						id: data.user.id,
-						email: data.user.email,
-						name: data.user.fullName,
-						image: data.user.avatarUrl,
-						accessToken: data.tokens.accessToken,
-						refreshToken: data.tokens.refreshToken,
-						subscriptionTier: data.user.subscriptionTier,
+						id: user.id,
+						email: user.email,
+						name: user.fullName,
+						image: user.avatarUrl,
+						accessToken: tokens.accessToken,
+						refreshToken: tokens.refreshToken,
+						subscriptionTier: user.subscriptionTier,
 					} satisfies NextAuthUser
 				} catch {
 					return null
@@ -100,25 +121,39 @@ const authOptions: NextAuthOptions = {
 				if (user.refreshToken) token.refreshToken = user.refreshToken
 			}
 
-			// Google OAuth — exchange Google token for backend token
+			// Google OAuth — exchange Google token for backend token.
+			// Backend flow: GET /auth/google → consent → GET /auth/google/callback
+			// returns TokenResponse (camelCase, no user object). Hydrate the
+			// profile via GET /users/me.
 			if (account?.provider === "google" && account.access_token) {
 				try {
-					const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-					const res = await fetch(`${apiUrl}/auth/google`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ googleToken: account.access_token }),
-					})
+					const apiUrl = apiBase()
+					const res = await fetch(
+						`${apiUrl}/auth/google/callback?code=${encodeURIComponent(account.access_token)}`,
+						{ headers: { Accept: "application/json" } },
+					)
 					if (res.ok) {
-						const data = await res.json() as {
-							user: { id: string; subscriptionTier: SubscriptionTier }
-							tokens: { accessToken: string; refreshToken: string; expiresAt: number }
+						const tokens = (await res.json()) as {
+							accessToken: string
+							refreshToken: string
+							tokenType: string
+							expiresAt: number
 						}
-						token.userId = data.user.id
-						token.subscriptionTier = data.user.subscriptionTier
-						token.accessToken = data.tokens.accessToken
-						token.refreshToken = data.tokens.refreshToken
-						token.expiresAt = data.tokens.expiresAt
+						token.accessToken = tokens.accessToken
+						token.refreshToken = tokens.refreshToken
+						token.expiresAt = tokens.expiresAt
+
+						const profileRes = await fetch(`${apiUrl}/users/me`, {
+							headers: { Authorization: `Bearer ${tokens.accessToken}` },
+						})
+						if (profileRes.ok) {
+							const user = (await profileRes.json()) as {
+								id: string
+								subscriptionTier: SubscriptionTier
+							}
+							token.userId = user.id
+							token.subscriptionTier = user.subscriptionTier
+						}
 					}
 				} catch {
 					// Fall through — token without backend auth

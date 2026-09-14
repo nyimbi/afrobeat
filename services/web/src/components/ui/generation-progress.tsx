@@ -7,6 +7,7 @@ interface GenerationProgressProps {
 	status: JobStatus | null
 	progressPercent: number
 	statusMessage: string
+	estimatedSeconds?: number | null
 	className?: string
 }
 
@@ -18,54 +19,64 @@ interface Step {
 
 const STEPS: Step[] = [
 	{ key: "queued", label: "Queue", icon: "⏳" },
-	{ key: "composing", label: "Rhythm", icon: "🥁" },
-	{ key: "melodizing", label: "Melody", icon: "🎸" },
-	{ key: "vocalizing", label: "Vocals", icon: "🎤" },
-	{ key: "mastering", label: "Master", icon: "✨" },
-	{ key: "completed", label: "Done", icon: "🎵" },
+	{ key: "ml_generating", label: "Compose", icon: "🥁" },
+	{ key: "audio_processing", label: "Master", icon: "✨" },
+	{ key: "uploading", label: "Upload", icon: "☁️" },
+	{ key: "complete", label: "Done", icon: "🎵" },
 ]
 
 const STATUS_ORDER: Record<JobStatus, number> = {
 	queued: 0,
-	composing: 1,
-	melodizing: 2,
-	vocalizing: 3,
-	mastering: 4,
-	completed: 5,
+	ml_generating: 1,
+	audio_processing: 2,
+	uploading: 3,
+	complete: 4,
 	failed: -1,
+	cancelled: -1,
+}
+
+function formatEta(totalSeconds: number | null | undefined): string | null {
+	if (totalSeconds == null || !Number.isFinite(totalSeconds) || totalSeconds <= 0) return null
+	if (totalSeconds < 60) return `~${Math.round(totalSeconds)}s left`
+	const mins = Math.floor(totalSeconds / 60)
+	const secs = Math.round(totalSeconds % 60)
+	return secs === 0 ? `~${mins}m left` : `~${mins}m ${secs}s left`
 }
 
 export function GenerationProgress({
 	status,
 	progressPercent,
 	statusMessage,
+	estimatedSeconds,
 	className,
 }: GenerationProgressProps) {
 	const currentOrder = status ? (STATUS_ORDER[status] ?? -1) : -1
 	const isFailed = status === "failed"
-	const isComplete = status === "completed"
+	const isCancelled = status === "cancelled"
+	const isComplete = status === "complete"
+	const isActive = !isFailed && !isCancelled && status !== null && !isComplete
+	const clamped = Math.max(0, Math.min(100, Math.round(progressPercent)))
+	const eta = isActive ? formatEta(estimatedSeconds) : null
 
 	return (
 		<div className={cn("space-y-6", className)}>
 			{/* Animated waveform visualizer */}
-			<div className="flex items-end justify-center gap-1 h-16">
+			<div className="flex items-end justify-center gap-1 h-16" aria-hidden="true">
 				{Array.from({ length: 28 }).map((_, i) => {
-					const active = !isFailed && status !== null && status !== "completed"
-					// Create a wave-like height pattern
 					const baseHeight = 20 + Math.sin(i * 0.6) * 15 + Math.cos(i * 0.3) * 10
 					return (
 						<span
 							key={i}
 							className={cn(
 								"rounded-full transition-colors duration-700",
-								active ? "bg-afro-gold" : isComplete ? "bg-afro-gold/60" : "bg-zinc-700",
+								isActive ? "bg-afro-gold" : isComplete ? "bg-afro-gold/60" : "bg-zinc-700",
 							)}
 							style={{
 								width: "3px",
 								height: `${baseHeight}%`,
-								animation: active ? `waveform ${0.8 + (i % 5) * 0.12}s ease-in-out infinite` : "none",
+								animation: isActive ? `waveform ${0.8 + (i % 5) * 0.12}s ease-in-out infinite` : "none",
 								animationDelay: `${(i * 0.06) % 1.2}s`,
-								opacity: active ? 0.7 + 0.3 * (i % 3 === 0 ? 1 : 0.5) : 0.3,
+								opacity: isActive ? 0.7 + 0.3 * (i % 3 === 0 ? 1 : 0.5) : 0.3,
 							}}
 						/>
 					)
@@ -74,29 +85,39 @@ export function GenerationProgress({
 
 			{/* Progress bar */}
 			<div className="space-y-2">
-				<div className="flex items-center justify-between text-xs">
+				<div className="flex items-center justify-between text-xs gap-3">
 					<span
 						className={cn(
-							"font-medium",
-							isFailed ? "text-red-400" : isComplete ? "text-afro-gold" : "text-zinc-300",
+							"font-medium truncate",
+							isFailed ? "text-red-400" : isCancelled ? "text-zinc-400" : isComplete ? "text-afro-gold" : "text-zinc-300",
 						)}
 					>
 						{statusMessage || "Waiting..."}
 					</span>
-					<span className="font-mono text-zinc-500 tabular-nums">
-						{isFailed ? "—" : `${Math.round(progressPercent)}%`}
+					<span className="font-mono text-zinc-500 tabular-nums shrink-0">
+						{isFailed || isCancelled ? "—" : `${clamped}%`}
+						{eta ? ` · ${eta}` : ""}
 					</span>
 				</div>
 
-				<div className="h-1.5 bg-dark-bg-elevated rounded-full overflow-hidden">
+				<div
+					className="h-1.5 bg-dark-bg-elevated rounded-full overflow-hidden"
+					role="progressbar"
+					aria-valuemin={0}
+					aria-valuemax={100}
+					aria-valuenow={clamped}
+					aria-label={statusMessage || "Generation progress"}
+				>
 					<div
 						className={cn(
 							"h-full rounded-full transition-all duration-500 ease-out",
 							isFailed
 								? "bg-red-500"
-								: "bg-gradient-to-r from-afro-gold-600 via-afro-gold to-amber-300",
+								: isCancelled
+									? "bg-zinc-600"
+									: "bg-gradient-to-r from-afro-gold-600 via-afro-gold to-amber-300",
 						)}
-						style={{ width: `${isFailed ? 100 : progressPercent}%` }}
+						style={{ width: `${isFailed || isCancelled ? 100 : clamped}%` }}
 					/>
 				</div>
 			</div>
@@ -106,7 +127,7 @@ export function GenerationProgress({
 				{/* Track line — sits behind circles at vertical center of the w-8 circles (top-4 = 16px) */}
 				<div className="absolute top-4 left-4 right-4 h-px bg-zinc-800 pointer-events-none" />
 				{/* Progress fill */}
-				{!isFailed && currentOrder >= 0 && (
+				{!isFailed && !isCancelled && currentOrder >= 0 && (
 					<div
 						className="absolute top-4 left-4 h-px bg-gradient-to-r from-afro-gold-600 to-afro-gold transition-all duration-700 pointer-events-none"
 						style={{
@@ -128,13 +149,15 @@ export function GenerationProgress({
 								<div
 									className={cn(
 										"w-8 h-8 rounded-full border flex items-center justify-center text-sm transition-all duration-500",
-										isFailed && step.key !== "completed"
+										isFailed
 											? "border-red-500/30 bg-red-500/10 text-red-400"
-											: isDone
-												? "border-afro-gold/50 bg-afro-gold/15 text-afro-gold"
-												: isCurrent
-													? "border-afro-gold bg-afro-gold/20 text-afro-gold animate-pulse"
-													: "border-zinc-800 bg-dark-bg-elevated text-zinc-700",
+											: isCancelled
+												? "border-zinc-700 bg-zinc-800/50 text-zinc-500"
+												: isDone
+													? "border-afro-gold/50 bg-afro-gold/15 text-afro-gold"
+													: isCurrent
+														? "border-afro-gold bg-afro-gold/20 text-afro-gold animate-pulse"
+														: "border-zinc-800 bg-dark-bg-elevated text-zinc-700",
 									)}
 								>
 									{isDone ? "✓" : step.icon}
@@ -146,11 +169,13 @@ export function GenerationProgress({
 										"text-[9px] font-medium uppercase tracking-wider transition-colors duration-500",
 										isFailed
 											? "text-zinc-700"
-											: isDone || isCurrent
-												? "text-afro-gold/70"
-												: isPending
-													? "text-zinc-800"
-													: "text-zinc-700",
+											: isCancelled
+												? "text-zinc-600"
+												: isDone || isCurrent
+													? "text-afro-gold/70"
+													: isPending
+														? "text-zinc-800"
+														: "text-zinc-700",
 									)}
 								>
 									{step.label}

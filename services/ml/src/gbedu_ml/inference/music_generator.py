@@ -10,6 +10,7 @@ from gbedu_core.errors import GenerationError
 from gbedu_core.schemas import GenerationRequest
 from pydantic import BaseModel, ConfigDict, Field
 
+from gbedu_ml.models.yue2 import YuE2Model
 from gbedu_ml.prompts.afrobeats import AfrobeatsPromptEngine
 
 if TYPE_CHECKING:
@@ -32,10 +33,10 @@ class MusicGenerationResult(BaseModel):
 
 
 class MusicGenerator:
-	"""Orchestrates the ACE-Step → Stable Audio → YuE fallback chain.
+	"""Orchestrates the ACE-Step → YuE2 → Stable Audio → YuE fallback chain.
 
 	Each model is tried in order. If a model's circuit breaker is open,
-	or it raises any exception, the next model is attempted. All three
+	or it raises any exception, the next model is attempted. All models
 	failing raises GenerationError with a summary of all failures.
 	"""
 
@@ -44,8 +45,12 @@ class MusicGenerator:
 		ace_step: AceStepModel,
 		stable_audio: StableAudioModel,
 		yue: YuEModel,
+		yue2: YuE2Model | None = None,
+		lyrics: str | None = None,
 	) -> None:
-		self._models = [ace_step, stable_audio, yue]
+		yue2 = yue2 if yue2 is not None else YuE2Model()
+		self._models = [ace_step, yue2, stable_audio, yue]
+		self._lyrics = lyrics
 		self._prompt_engine = AfrobeatsPromptEngine()
 
 	async def generate(
@@ -54,6 +59,15 @@ class MusicGenerator:
 		assert request.prompt, "request.prompt must not be empty"
 
 		prompt = self._prompt_engine.build_music_prompt(request)
+		# User-supplied lyrics take precedence over constructor-provided ones.
+		lyrics = request.lyrics or self._lyrics
+		# Only forward a seed when explicitly set — models define their own
+		# default (e.g. YuE2 uses 0) and must not receive seed=None.
+		model_kwargs: dict[str, Any] = {}
+		if lyrics is not None:
+			model_kwargs["lyrics"] = lyrics
+		if request.seed is not None:
+			model_kwargs["seed"] = request.seed
 		failures: list[dict[str, str]] = []
 
 		for model in self._models:
@@ -99,6 +113,7 @@ class MusicGenerator:
 				audio_path = await model.generate_safe(
 					prompt=prompt,
 					duration_seconds=request.duration_seconds,
+					**model_kwargs,
 				)
 				log.info(
 					"music_gen.success",

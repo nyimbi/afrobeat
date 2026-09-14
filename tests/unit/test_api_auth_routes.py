@@ -105,14 +105,14 @@ def test_register_success(mock_welcome, mock_verify) -> None:
 			json={
 				"email": "new@example.com",
 				"password": "Password123!",
-				"full_name": "New User",
+				"fullName": "New User",
 			},
 		)
 
 	assert resp.status_code == 201
 	body = resp.json()
 	assert "tokens" in body
-	assert body["tokens"]["access_token"] == "fake-access-token"
+	assert body["tokens"]["accessToken"] == "fake-access-token"
 	mock_verify.assert_called_once()
 	mock_welcome.assert_called_once()
 
@@ -226,8 +226,8 @@ def test_login_success() -> None:
 
 	assert resp.status_code == 200
 	body = resp.json()
-	assert body["access_token"] == "fake-access-token"
-	assert body["token_type"] == "bearer"
+	assert body["accessToken"] == "fake-access-token"
+	assert body["tokenType"] == "bearer"
 
 
 def test_login_invalid_credentials_returns_401() -> None:
@@ -288,8 +288,8 @@ def test_refresh_success() -> None:
 
 	assert resp.status_code == 200
 	body = resp.json()
-	assert body["access_token"] == "new-access"
-	assert body["refresh_token"] == "new-refresh"
+	assert body["accessToken"] == "new-access"
+	assert body["refreshToken"] == "new-refresh"
 
 
 def test_refresh_invalid_token_returns_401() -> None:
@@ -524,7 +524,7 @@ def test_google_oauth_callback_success() -> None:
 
 	assert resp.status_code == 200
 	body = resp.json()
-	assert body["access_token"] == "fake-access-token"
+	assert body["accessToken"] == "fake-access-token"
 
 
 def test_google_oauth_callback_google_token_exchange_fails_returns_400() -> None:

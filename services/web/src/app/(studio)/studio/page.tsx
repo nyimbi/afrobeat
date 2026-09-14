@@ -26,7 +26,9 @@ import { UpgradeModal } from "@/components/payments/upgrade-modal"
 import { Navbar } from "@/components/layout/navbar"
 import { cn, subGenreLabel, languageFlag, formatDuration } from "@/lib/utils"
 import { api } from "@/lib/api"
-import type { SubGenre, Language } from "@/lib/types"
+import type { SubGenre, Language, LyricsMode } from "@/lib/types"
+import { LyricsStage } from "@/components/studio/lyrics-stage"
+import { resolveApprovedLyrics } from "@/lib/lyrics"
 
 // ---- Static options ----
 
@@ -122,18 +124,25 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 // ---- Main page ----
 
 export default function StudioPage() {
-	const { user } = useAuthStore()
-	const {
-		isGenerating,
-		jobStatus,
-		progressPercent,
-		statusMessage,
-		currentTrack,
-		error,
-		submitGeneration,
-		cancelGeneration,
-		reset,
-	} = useGenerationStore()
+		const { user } = useAuthStore()
+		const {
+			isGenerating,
+			jobStatus,
+			progressPercent,
+			statusMessage,
+			estimatedSeconds,
+			currentTrack,
+			error,
+			submitGeneration,
+			cancelGeneration,
+			reset,
+			renditions,
+			isGeneratingRenditions,
+			activeRenditionJobId,
+			submitRenditions,
+			selectRendition,
+			cancelRenditions,
+		} = useGenerationStore()
 
 	// Form state
 	const [prompt, setPrompt] = useState("")
@@ -144,6 +153,11 @@ export default function StudioPage() {
 	const [showAdvanced, setShowAdvanced] = useState(false)
 	const [bpmOverride, setBpmOverride] = useState<string>("")
 	const [voiceModelId] = useState<string | null>(null)
+	const [lyricsMode, setLyricsMode] = useState<LyricsMode>("ai")
+	const [lyricsText, setLyricsText] = useState("")
+	const [renditionCount, setRenditionCount] = useState<1 | 2 | 3>(1)
+
+	const approvedLyrics = resolveApprovedLyrics(lyricsMode, lyricsText)
 
 	// UI state
 	const [showUpgrade, setShowUpgrade] = useState(false)
@@ -159,16 +173,23 @@ export default function StudioPage() {
 
 	const handleGenerate = useCallback(async () => {
 		if (!prompt.trim()) return
-		await submitGeneration({
+		const req = {
 			prompt: prompt.trim(),
 			subGenre,
 			language,
 			energyLevel: energy,
 			durationSeconds: duration,
-			bpmOverride: bpmOverride ? parseInt(bpmOverride, 10) : null,
+			bpm: bpmOverride ? parseInt(bpmOverride, 10) : null,
 			voiceModelId,
-		})
-	}, [prompt, subGenre, language, energy, duration, bpmOverride, voiceModelId, submitGeneration])
+			lyrics: approvedLyrics,
+			seed: null,
+		}
+		if (renditionCount > 1) {
+			await submitRenditions(req, renditionCount)
+		} else {
+			await submitGeneration(req)
+		}
+	}, [prompt, subGenre, language, energy, duration, bpmOverride, voiceModelId, approvedLyrics, renditionCount, submitGeneration, submitRenditions])
 
 	const handleDownload = useCallback(async () => {
 		if (!currentTrack) return
@@ -268,6 +289,45 @@ export default function StudioPage() {
 									onChange={setPrompt}
 									disabled={isGenerating}
 								/>
+							</div>
+
+						<LyricsStage
+								prompt={prompt}
+								subGenre={subGenre}
+								language={language}
+								disabled={isGenerating}
+								mode={lyricsMode}
+								onModeChange={setLyricsMode}
+								lyricsText={lyricsText}
+								onLyricsTextChange={setLyricsText}
+							/>
+
+						{/* Renditions */}
+							<div className="space-y-2">
+								<SectionLabel>Versions</SectionLabel>
+								<div className="grid grid-cols-3 gap-1.5">
+									{([1, 2, 3] as const).map((n) => (
+										<button
+											key={n}
+											onClick={() => setRenditionCount(n)}
+											disabled={isGenerating}
+											className={cn(
+												"py-2 rounded-lg text-xs font-medium border transition-all",
+												renditionCount === n
+													? "border-afro-gold/50 bg-afro-gold/10 text-afro-gold"
+													: "border-white/[0.07] text-zinc-500 hover:border-white/[0.14] hover:text-zinc-300",
+												"disabled:opacity-50",
+											)}
+										>
+											{n === 1 ? "1 take" : `${n} takes`}
+										</button>
+									))}
+								</div>
+								{renditionCount > 1 && (
+									<p className="text-[10px] text-zinc-700">
+										{renditionCount} variations, each with its own seed — uses {renditionCount} credits.
+									</p>
+								)}
 							</div>
 
 							{/* Sub-genre — grouped by region */}
@@ -412,10 +472,16 @@ export default function StudioPage() {
 						<div className="p-5 sm:p-6 border-t border-white/[0.06] bg-dark-bg-primary/80 backdrop-blur-xl">
 							{isGenerating ? (
 								<button
-									onClick={cancelGeneration}
+									onClick={() => {
+										if (isGeneratingRenditions) {
+											void cancelRenditions()
+										} else {
+											void cancelGeneration()
+										}
+									}}
 									className="w-full py-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 text-sm font-semibold hover:bg-red-500/20 transition-all"
 								>
-									Cancel generation
+									Cancel generation{renditions.length > 1 ? ` (${renditions.length} takes)` : ""}
 								</button>
 							) : (
 								<button
@@ -440,8 +506,8 @@ export default function StudioPage() {
 							{user && (
 								<p className="text-center text-[10px] text-zinc-700 mt-2">
 									{user.subscriptionTier === "free"
-										? `${user.creditsRemaining} free tracks remaining`
-										: `${user.subscriptionTier} plan`}
+										? `${user.creditsRemaining} free tracks remaining${renditionCount > 1 ? ` · ${renditionCount} takes = ${renditionCount} credits` : ""}`
+										: `${user.subscriptionTier} plan${renditionCount > 1 ? ` · ${renditionCount} takes per generation` : ""}`}
 								</p>
 							)}
 						</div>
@@ -493,7 +559,7 @@ export default function StudioPage() {
 									<p className="text-xs text-zinc-600 max-w-xs">{error}</p>
 								</div>
 								<button
-									onClick={reset}
+									onClick={handleGenerate}
 									className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-dark-bg-elevated border border-white/[0.08] text-sm text-zinc-400 hover:text-zinc-200 hover:border-white/[0.16] transition-all"
 								>
 									<RefreshCw className="w-3.5 h-3.5" />
@@ -502,7 +568,7 @@ export default function StudioPage() {
 							</div>
 						)}
 
-						{/* Generation in progress */}
+{/* Generation in progress */}
 						{showProgress && (
 							<div className="flex-1 flex flex-col items-center justify-center p-8 gap-8">
 								<div className="w-full max-w-md space-y-2">
@@ -510,11 +576,86 @@ export default function StudioPage() {
 										status={jobStatus}
 										progressPercent={progressPercent}
 										statusMessage={statusMessage}
+										estimatedSeconds={estimatedSeconds}
 									/>
 								</div>
 								<p className="text-xs text-zinc-700 text-center max-w-xs leading-relaxed">
-									Gbẹdu&apos;s AI is composing your track. This typically takes 30–90 seconds depending on duration.
+									Gbẹdu&apos;s AI is composing your track. This typically takes up to {Math.ceil(duration * 0.6 / 30) * 30 + 30} seconds depending on duration.
 								</p>
+								<button
+									onClick={cancelGeneration}
+									className="text-xs text-zinc-600 hover:text-red-400 transition-colors underline underline-offset-4"
+								>
+									Cancel and start over
+								</button>
+							</div>
+						)}
+
+						{/* Renditions — compare takes */}
+						{renditions.length > 0 && (
+							<div className="px-5 sm:px-8 pt-5 sm:pt-8">
+								<div className="glass rounded-xl p-4 border border-white/[0.06] space-y-3">
+									<p className="text-[10px] font-mono uppercase tracking-widest text-zinc-600">
+										Takes ({renditions.filter((r) => r.status === "complete").length}/{renditions.length} ready)
+									</p>
+									<div className="space-y-2">
+										{renditions.map((r, i) => {
+											const isActive = activeRenditionJobId === r.jobId
+											const isDone = r.status === "complete" && r.track !== null
+											return (
+												<div
+													key={r.jobId}
+													className={cn(
+														"flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all",
+														isActive
+															? "border-afro-gold/50 bg-afro-gold/10"
+															: "border-white/[0.07] bg-dark-bg-elevated",
+													)}
+												>
+													<span className="font-mono text-xs text-zinc-500 shrink-0 w-14">
+														Take {i + 1}
+													</span>
+													<div className="flex-1 min-w-0">
+														{r.status === "failed" ? (
+															<p className="text-xs text-red-400 truncate">{r.error ?? "Failed"}</p>
+														) : isDone ? (
+															<p className="text-xs text-zinc-300 truncate">
+																{r.track?.title ?? `Take ${i + 1}`} · {formatDuration(r.track?.durationSeconds ?? 0)}
+															</p>
+														) : (
+															<>
+																<p className="text-xs text-zinc-500 truncate">{r.statusMessage}</p>
+																<div className="h-1 bg-dark-bg-primary rounded-full overflow-hidden mt-1.5">
+																	<div
+																		className="h-full rounded-full bg-gradient-to-r from-afro-gold-600 to-afro-gold transition-all duration-500"
+																		style={{ width: `${Math.max(0, Math.min(100, r.progressPercent))}%` }}
+																	/>
+																</div>
+															</>
+														)}
+													</div>
+													<span className="font-mono text-[10px] text-zinc-600 shrink-0 hidden sm:inline">
+														seed {r.seed}
+													</span>
+													{isDone && (
+														<button
+															onClick={() => selectRendition(r.jobId)}
+															disabled={isActive}
+															className={cn(
+																"px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0",
+																isActive
+																	? "text-afro-gold cursor-default"
+																	: "bg-dark-bg-primary border border-white/[0.08] text-zinc-400 hover:text-zinc-200 hover:border-white/[0.16]",
+															)}
+														>
+															{isActive ? "Playing" : "Listen"}
+														</button>
+													)}
+												</div>
+											)
+										})}
+									</div>
+								</div>
 							</div>
 						)}
 

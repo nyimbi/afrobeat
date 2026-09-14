@@ -116,10 +116,18 @@ class GenerationPipeline:
 		# ── Step 1: Music + lyrics in parallel ────────────────────────────────
 		await self._publish_progress(job_id, 10, "generating_music_and_lyrics")
 
-		music_task = asyncio.create_task(self._music_gen.generate(request))
-		lyrics_task = asyncio.create_task(self._generate_lyrics_safe(request))
+		if request.lyrics is not None:
+			# User supplied lyrics — skip the lyric LLM entirely and run
+			# music generation alone. Sections are parsed with the same
+			# rules so downstream consumers see an identical shape.
+			log.info("pipeline.lyrics.user_supplied", job_id=job_id)
+			music_result = await self._music_gen.generate(request)
+			lyric_result = self._lyrics_from_user_text(request)
+		else:
+			music_task = asyncio.create_task(self._music_gen.generate(request))
+			lyrics_task = asyncio.create_task(self._generate_lyrics_safe(request))
 
-		music_result, lyric_result = await asyncio.gather(music_task, lyrics_task)
+			music_result, lyric_result = await asyncio.gather(music_task, lyrics_task)
 
 		await self._publish_progress(job_id, 60, "music_done")
 		log.info(
@@ -189,6 +197,7 @@ class GenerationPipeline:
 				"has_vocals": vocal_path is not None,
 				"language": request.language.value,
 				"sub_genre": request.sub_genre.value,
+				"lyrics_source": "user" if request.lyrics is not None else "ai",
 			},
 		)
 
@@ -203,6 +212,24 @@ class GenerationPipeline:
 		except Exception as exc:
 			log.warning("pipeline.lyric_gen.failed", error=str(exc))
 			return None
+
+	def _lyrics_from_user_text(self, request: GenerationRequest) -> LyricResult:
+		"""Build a LyricResult from user-supplied lyrics (no LLM call)."""
+		from gbedu_ml.inference.lyric_generator import LyricGenerator, LyricResult
+
+		assert request.lyrics is not None, "request.lyrics must be set"
+		raw = request.lyrics.strip()
+		sections = LyricGenerator.parse_sections(raw)
+		return LyricResult(
+			verse1=sections.get("verse1", ""),
+			prehook=sections.get("prehook", ""),
+			hook=sections.get("hook", ""),
+			verse2=sections.get("verse2", ""),
+			bridge=sections.get("bridge", ""),
+			outro=sections.get("outro", ""),
+			full_lyrics=raw,
+			language_used=request.language,
+		)
 
 	async def _write_lyrics_file(
 		self, job_id: str, lyric_result: LyricResult

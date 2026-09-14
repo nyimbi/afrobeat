@@ -45,6 +45,44 @@ class MLSettings(BaseSettings):
 		default="m-a-p/YuE-s1-anneal-en-cot",
 		description="HuggingFace repo ID for YuE 7B",
 	)
+	YUE2_MODEL_ID: str = Field(
+		default="audio-cpp/Yue2-3B-GGUF",
+		description="HuggingFace repo ID for YuE2-3B GGUF weights (audio.cpp runtime)",
+	)
+	YUE2_MODEL_GGUF: str = Field(
+		default="yue2-3b-q8_0.gguf",
+		description="GGUF quant file for the YuE2 main model (bf16/q8_0/q4_0)",
+	)
+	YUE2_VAE_GGUF: str = Field(
+		default="yue2-vae-f16.gguf",
+		description="GGUF file for the YuE2 VAE decoder (f32/f16)",
+	)
+	YUE2_AUDIOCPP_BIN: Path = Field(
+		default=Path("/app/audiocpp/bin/audiocpp_cli"),
+		description="Path to the audio.cpp audiocpp_cli binary",
+	)
+	YUE2_THREADS: int = Field(
+		default=8,
+		ge=1,
+		le=64,
+		description="CPU threads for audio.cpp inference",
+	)
+	YUE2_NUM_INFERENCE_STEPS: int = Field(
+		default=8,
+		ge=1,
+		le=64,
+		description="Flow-matching steps for the YuE2 NAR synthesis stage",
+	)
+	YUE2_COT: str = Field(
+		default="full",
+		description="YuE2 symbolic planning mode: full (melody+chords), melody, or off",
+	)
+	YUE2_TIMEOUT_SECONDS: int = Field(
+		default=600,
+		ge=60,
+		le=1800,
+		description="Hard wall-clock timeout for a single audiocpp_cli invocation",
+	)
 	LLAMA_MODEL_ID: str = Field(
 		default="meta-llama/Meta-Llama-3-8B-Instruct",
 		description="HuggingFace repo ID for Llama-3 8B Instruct (lyric generation)",

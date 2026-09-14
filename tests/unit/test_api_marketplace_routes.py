@@ -483,7 +483,7 @@ def test_my_listings_returns_seller_listings() -> None:
 	assert resp.status_code == 200
 	body = resp.json()
 	assert body["total"] == 1
-	assert body["items"][0]["seller_id"] == "user-test-001"
+	assert body["items"][0]["producerId"] == "user-test-001"
 
 
 # ── GET /marketplace/my-purchases ─────────────────────────────────────────────

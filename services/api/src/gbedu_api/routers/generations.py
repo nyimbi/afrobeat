@@ -9,7 +9,7 @@ from gbedu_core.errors import GbeduError
 from gbedu_core.models.job import GenerationJob
 from gbedu_core.models.track import Language, SubGenre
 from gbedu_core.models.user import User
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,41 +31,74 @@ def _rate_limit[F: Callable[..., Any]](limit_value: str) -> Callable[[F], F]:
 
 
 class GenerationCreateRequest(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	prompt: str = Field(min_length=10, max_length=2048)
-	sub_genre: SubGenre
+	sub_genre: SubGenre = Field(validation_alias="subGenre")
 	language: Language
 	bpm: int | None = Field(default=None, ge=60, le=200)
-	energy_level: int = Field(default=5, ge=1, le=10)
-	voice_model_id: str | None = None
-	duration_seconds: int = Field(default=30, ge=10, le=300)
+	energy_level: int = Field(default=5, ge=1, le=10, validation_alias="energyLevel")
+	voice_model_id: str | None = Field(default=None, validation_alias="voiceModelId")
+	duration_seconds: int = Field(default=30, ge=10, le=300, validation_alias="durationSeconds")
+	# Optional user-supplied lyrics — skips AI lyric generation.
+	lyrics: str | None = Field(default=None, min_length=1, max_length=5000)
+	# Optional RNG seed — same prompt + same seed reproduces a rendition.
+	seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+
+	@field_validator("lyrics")
+	@classmethod
+	def strip_lyrics(cls, v: str | None) -> str | None:
+		if v is None:
+			return None
+		stripped = v.strip()
+		if not stripped:
+			raise ValueError("lyrics must not be blank — omit the field for AI lyrics")
+		return stripped
 
 
 class GenerationJobResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	id: str
 	status: str
-	progress_percent: int
-	prompt_used: str
-	model_used: str | None
-	error_message: str | None
-	track_id: str | None
-	created_at: str
-	started_at: str | None
-	completed_at: str | None
+	progress_percent: int = Field(alias="progressPercent")
+	prompt_used: str = Field(alias="promptUsed")
+	model_used: str | None = Field(default=None, alias="modelUsed")
+	error_message: str | None = Field(default=None, alias="errorMessage")
+	track_id: str | None = Field(default=None, alias="trackId")
+	created_at: str = Field(alias="createdAt")
+	started_at: str | None = Field(default=None, alias="startedAt")
+	completed_at: str | None = Field(default=None, alias="completedAt")
+	status_message: str = Field(default="", alias="statusMessage")
+	estimated_seconds: int | None = Field(default=None, alias="estimatedSeconds")
 
 
 class PaginatedJobsResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	items: list[GenerationJobResponse]
 	total: int
 	page: int
-	page_size: int
+	page_size: int = Field(alias="pageSize")
 
 
 class CancelResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 	message: str
+
+
+_STATUS_MESSAGES: dict[str, str] = {
+	"queued": "Your track is queued...",
+	"ml_generating": "Composing your track...",
+	"audio_processing": "Mastering your track...",
+	"uploading": "Uploading your track...",
+	"complete": "Your track is ready!",
+	"failed": "Generation failed. Please try again.",
+	"cancelled": "Generation cancelled.",
+}
+
+
+# Rough per-tier estimate used for the ETA hint. Duration-driven: ML generation
+# dominates wall time; add fixed overhead for DSP + upload.
+def _estimate_seconds(duration_seconds: int) -> int:
+	return max(45, int(duration_seconds * 0.6) + 30)
 
 
 def _job_response(job: GenerationJob) -> GenerationJobResponse:
@@ -80,7 +113,7 @@ def _job_response(job: GenerationJob) -> GenerationJobResponse:
 		created_at=job.created_at.isoformat(),
 		started_at=job.started_at.isoformat() if job.started_at else None,
 		completed_at=job.completed_at.isoformat() if job.completed_at else None,
-	)
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -108,6 +141,8 @@ async def submit_generation(
 		energy_level=body.energy_level,
 		voice_model_id=body.voice_model_id,
 		duration_seconds=body.duration_seconds,
+		lyrics=body.lyrics,
+		seed=body.seed,
 	)
 
 	svc = GenerationService(db, redis)
@@ -116,7 +151,10 @@ async def submit_generation(
 	except GbeduError as exc:
 		raise HTTPException(status_code=exc.http_status, detail=exc.to_dict())
 
-	return _job_response(job)
+	resp = _job_response(job)
+	resp["statusMessage"] = _STATUS_MESSAGES.get(job.status.value, "")
+	resp["estimatedSeconds"] = _estimate_seconds(body.duration_seconds)
+	return resp
 
 
 @router.get(
@@ -187,4 +225,4 @@ async def list_generations(
 		total=total,
 		page=page,
 		page_size=page_size,
-	)
+	).model_dump(by_alias=True)

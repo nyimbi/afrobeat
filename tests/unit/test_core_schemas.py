@@ -174,6 +174,55 @@ def test_generation_request_extra_forbidden() -> None:
 	assert any(e["type"] == "extra_forbidden" for e in exc_info.value.errors())
 
 
+def test_generation_request_accepts_lyrics_and_seed() -> None:
+	r = GenerationRequest(
+		prompt="groovy beat",
+		sub_genre="afropop",
+		language="yoruba",
+		lyrics="[VERSE 1]\nMo dupe o",
+		seed=42,
+	)
+	assert r.lyrics == "[VERSE 1]\nMo dupe o"
+	assert r.seed == 42
+
+
+def test_generation_request_lyrics_seed_default_none() -> None:
+	r = GenerationRequest(
+		prompt="groovy beat",
+		sub_genre="afropop",
+		language="english",
+	)
+	assert r.lyrics is None
+	assert r.seed is None
+
+
+def test_generation_request_blank_lyrics_rejected() -> None:
+	with pytest.raises(ValidationError):
+		GenerationRequest(
+			prompt="groovy beat",
+			sub_genre="afropop",
+			language="english",
+			lyrics="   ",
+		)
+
+
+def test_generation_request_seed_bounds() -> None:
+	with pytest.raises(ValidationError):
+		GenerationRequest(
+			prompt="groovy beat",
+			sub_genre="afropop",
+			language="english",
+			seed=-1,
+		)
+	with pytest.raises(ValidationError):
+		GenerationRequest(
+			prompt="groovy beat",
+			sub_genre="afropop",
+			language="english",
+			seed=2**31,
+		)
+
+
 # ── JobStatusUpdate ────────────────────────────────────────────────────────────
 
 

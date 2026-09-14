@@ -101,6 +101,8 @@ class GenerationService:
 				"energy_level": request.energy_level,
 				"voice_model_id": request.voice_model_id,
 				"duration_seconds": request.duration_seconds,
+				"lyrics": request.lyrics,
+				"seed": request.seed,
 			},
 		)
 		self._db.add(job)

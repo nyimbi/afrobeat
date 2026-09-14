@@ -27,24 +27,24 @@ router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 
 
 class ListingResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	id: str
-	track_id: str
-	seller_id: str
+	track_id: str = Field(alias="trackId")
+	seller_id: str = Field(alias="producerId")
 	title: str
 	description: str | None
 	status: str
-	license_type: str
-	price_minor: int
-	price_decimal: float
+	license_type: str = Field(alias="licenseType")
+	price_minor: int = Field(alias="priceMinor")
+	price_decimal: float = Field(alias="price")
 	currency: str
-	view_count: int
-	purchase_count: int
+	view_count: int = Field(alias="viewCount")
+	purchase_count: int = Field(alias="purchaseCount")
 	tags: list[str]
-	preview_url: str | None
-	sub_genre: str
+	preview_url: str | None = Field(alias="previewUrl")
+	sub_genre: str = Field(alias="subGenre")
 	bpm: int | None
-	created_at: str
+	created_at: str = Field(alias="createdAt")
 
 
 class CreateListingRequest(BaseModel):
@@ -59,28 +59,29 @@ class CreateListingRequest(BaseModel):
 
 
 class PurchaseBeatRequest(BaseModel):
-	model_config = ConfigDict(extra="forbid")
-	payment_method: str | None = None
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
+	payment_method: str | None = Field(default=None, validation_alias="paymentMethod")
 
 
 class PurchaseResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	id: str | None = None
-	listing_id: str
-	amount_minor: int | None = None
+	listing_id: str = Field(default=None, alias="listingId")
+	amount_minor: int | None = Field(default=None, alias="amountMinor")
 	currency: str | None = None
-	license_type: str | None = None
-	download_url: str | None = None
-	checkout_url: str | None = None
-	created_at: str | None = None
+	license_type: str | None = Field(default=None, alias="licenseType")
+	download_url: str | None = Field(default=None, alias="downloadUrl")
+	checkout_url: str | None = Field(default=None, alias="checkoutUrl")
+	created_at: str | None = Field(default=None, alias="createdAt")
 
 
 class PaginatedListingsResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	items: list[ListingResponse]
 	total: int
 	page: int
-	page_size: int
+	page_size: int = Field(alias="pageSize")
+	has_more: bool = Field(default=False, alias="hasMore")
 
 
 def _listing_response(listing: BeatListing, track: Track | None = None) -> ListingResponse:
@@ -104,7 +105,7 @@ def _listing_response(listing: BeatListing, track: Track | None = None) -> Listi
 		sub_genre=sub_genre,
 		bpm=bpm,
 		created_at=listing.created_at.isoformat(),
-	)
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -165,7 +166,13 @@ async def browse_beats(
 	rows = (await db.execute(paged)).all()
 
 	items = [_listing_response(listing, track) for listing, track in rows]
-	return PaginatedListingsResponse(items=items, total=total, page=page, page_size=page_size)
+	return PaginatedListingsResponse(
+		items=items,
+		total=total,
+		page=page,
+		page_size=page_size,
+		has_more=(page * page_size) < total,
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 @router.post(
@@ -331,7 +338,7 @@ async def purchase_beat(
 			license_type=purchase.license_type.value,
 			download_url=purchase.download_url,
 			created_at=purchase.created_at.isoformat(),
-		)
+		).model_dump(by_alias=True, exclude_none=False)
 
 	# ── Paid beat — create payment provider checkout session ─────────────────
 	payment_method = (body.payment_method or "stripe").lower()
@@ -379,7 +386,9 @@ async def purchase_beat(
 				},
 			)
 		log.info("marketplace.stripe_checkout_created", listing_id=listing.id, buyer_id=user.id)
-		return PurchaseResponse(listing_id=listing.id, checkout_url=session.url)
+		return PurchaseResponse(listing_id=listing.id, checkout_url=session.url).model_dump(
+			by_alias=True, exclude_none=False
+		)
 
 	elif payment_method == "paystack":
 		async with httpx.AsyncClient(timeout=30.0) as http:
@@ -410,7 +419,9 @@ async def purchase_beat(
 			)
 		ps_data = resp.json()["data"]
 		log.info("marketplace.paystack_checkout_created", listing_id=listing.id, buyer_id=user.id)
-		return PurchaseResponse(listing_id=listing.id, checkout_url=ps_data["authorization_url"])
+		return PurchaseResponse(
+			listing_id=listing.id, checkout_url=ps_data["authorization_url"]
+		).model_dump(by_alias=True, exclude_none=False)
 
 	raise HTTPException(
 		status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

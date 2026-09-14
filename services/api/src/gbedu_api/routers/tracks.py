@@ -24,36 +24,36 @@ router = APIRouter(prefix="/tracks", tags=["tracks"])
 
 
 class TrackResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	id: str
 	title: str
 	prompt: str
-	sub_genre: str
+	sub_genre: str = Field(alias="subGenre")
 	language: str
 	bpm: int | None
 	key: str | None
-	energy_level: int
-	duration_seconds: int | None
+	energy_level: int = Field(alias="energyLevel")
+	duration_seconds: int | None = Field(alias="durationSeconds")
 	status: str
-	audio_url: str | None
-	audio_url_watermarked: str | None
-	cover_art_url: str | None
+	audio_url: str | None = Field(alias="audioUrl")
+	audio_url_watermarked: str | None = Field(default=None, alias="previewUrl")
+	cover_art_url: str | None = Field(alias="coverArtUrl")
 	lyrics: str | None
-	is_public: bool
-	play_count: int
-	share_count: int
-	created_at: str
+	is_public: bool = Field(alias="isPublic")
+	play_count: int = Field(alias="playCount")
+	share_count: int = Field(alias="shareCount")
+	created_at: str = Field(alias="createdAt")
 
 
 class TrackUpdateRequest(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	title: str | None = Field(default=None, min_length=1, max_length=256)
-	is_public: bool | None = None
+	is_public: bool | None = Field(default=None, validation_alias="isPublic")
 
 
 class StemsResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
-	track_id: str
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
+	track_id: str = Field(alias="trackId")
 	stems: dict[str, str]
 
 
@@ -68,11 +68,12 @@ class ShareCardResponse(BaseModel):
 
 
 class PaginatedTracksResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	items: list[TrackResponse]
 	total: int
 	page: int
-	page_size: int
+	page_size: int = Field(alias="pageSize")
+	has_more: bool = Field(default=False, alias="hasMore")
 
 
 class DeleteTrackResponse(BaseModel):
@@ -100,7 +101,7 @@ def _track_response(track: Track) -> TrackResponse:
 		play_count=track.play_count,
 		share_count=track.share_count,
 		created_at=track.created_at.isoformat(),
-	)
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 async def _get_owned_track(track_id: str, user_id: str, db: AsyncSession) -> Track:
@@ -163,7 +164,8 @@ async def list_public_tracks(
 		total=total,
 		page=page,
 		page_size=page_size,
-	)
+		has_more=(page * page_size) < total,
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 @router.get(
@@ -207,7 +209,8 @@ async def list_my_tracks(
 		total=total,
 		page=page,
 		page_size=page_size,
-	)
+		has_more=(page * page_size) < total,
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 @router.get(
@@ -303,7 +306,7 @@ async def get_stems(
 		except GbeduError as exc:
 			log.warning("track.stems.presign_failed", stem=stem_name, error=str(exc))
 
-	return StemsResponse(track_id=track_id, stems=presigned)
+	return StemsResponse(track_id=track_id, stems=presigned).model_dump(by_alias=True)
 
 
 @router.post(

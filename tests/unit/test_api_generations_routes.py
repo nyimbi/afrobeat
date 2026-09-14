@@ -115,6 +115,30 @@ def test_submit_generation_prompt_too_short_returns_422() -> None:
 	assert resp.status_code == 422
 
 
+def test_submit_generation_forwards_lyrics_and_seed() -> None:
+	client, _, _, _ = _build_client()
+	job = _make_job("job-003", "queued")
+
+	with patch("gbedu_api.routers.generations.GenerationService") as MockSvc:
+		instance = MockSvc.return_value
+		instance.submit_job = AsyncMock(return_value=job)
+		resp = client.post(
+			"/api/v1/generations",
+			json={**_VALID_BODY, "lyrics": "[VERSE 1]\nMo dupe o", "seed": 7},
+		)
+
+	assert resp.status_code == 202
+	_, kwargs = instance.submit_job.await_args
+	assert kwargs["request"].lyrics == "[VERSE 1]\nMo dupe o"
+	assert kwargs["request"].seed == 7
+
+
+def test_submit_generation_blank_lyrics_returns_422() -> None:
+	client, _, _, _ = _build_client()
+	resp = client.post("/api/v1/generations", json={**_VALID_BODY, "lyrics": "   "})
+	assert resp.status_code == 422
+
+
 def test_submit_generation_missing_required_fields_returns_422() -> None:
 	client, _, _, _ = _build_client()
 	resp = client.post(
@@ -154,7 +178,7 @@ def test_get_generation_status_success() -> None:
 	body = resp.json()
 	assert body["id"] == "job-002"
 	assert body["status"] == "processing"
-	assert body["progress_percent"] == 40
+	assert body["progressPercent"] == 40
 
 
 def test_get_generation_status_not_found_returns_404() -> None:
@@ -234,7 +258,7 @@ def test_list_generations_returns_paginated() -> None:
 	assert body["total"] == 3
 	assert len(body["items"]) == 3
 	assert body["page"] == 1
-	assert body["page_size"] == 20
+	assert body["pageSize"] == 20
 
 
 def test_list_generations_custom_page_params() -> None:
@@ -248,7 +272,7 @@ def test_list_generations_custom_page_params() -> None:
 	assert resp.status_code == 200
 	body = resp.json()
 	assert body["page"] == 2
-	assert body["page_size"] == 10
+	assert body["pageSize"] == 10
 
 
 def test_list_generations_empty() -> None:
@@ -276,4 +300,4 @@ def test_list_generations_invalid_page_clamped() -> None:
 	assert resp.status_code == 200
 	body = resp.json()
 	assert body["page"] == 1
-	assert body["page_size"] == 20
+	assert body["pageSize"] == 20

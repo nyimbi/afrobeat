@@ -80,9 +80,9 @@ def test_get_me_returns_profile() -> None:
 	body = resp.json()
 	assert body["id"] == "user-test-001"
 	assert body["email"] == "test@example.com"
-	assert body["subscription_tier"] == "free"
-	assert body["is_verified"] is True
-	assert body["is_active"] is True
+	assert body["subscriptionTier"] == "free"
+	assert body["isVerified"] is True
+	assert body["isActive"] is True
 
 
 def test_get_me_unauthenticated_returns_401() -> None:
@@ -191,11 +191,11 @@ def test_get_my_stats_returns_counts() -> None:
 
 	assert resp.status_code == 200
 	body = resp.json()
-	assert body["total_tracks"] == 10
-	assert body["tracks_ready"] == 7
-	assert body["total_generations_today"] == 5
-	assert body["daily_limit"] == 20  # creator tier limit
-	assert body["subscription_tier"] == "creator"
+	assert body["totalTracks"] == 10
+	assert body["tracksReady"] == 7
+	assert body["totalGenerationsToday"] == 5
+	assert body["dailyLimit"] == 20   # creator tier limit
+	assert body["subscriptionTier"] == "creator"
 
 
 def test_get_my_stats_no_redis_key_defaults_to_zero() -> None:
@@ -227,7 +227,7 @@ def test_get_my_stats_no_redis_key_defaults_to_zero() -> None:
 	resp = client.get("/api/v1/users/me/stats")
 
 	assert resp.status_code == 200
-	assert resp.json()["total_generations_today"] == 0
+	assert resp.json()["totalGenerationsToday"] == 0
 
 
 # ── POST /users/me/avatar ──────────────────────────────────────────────────────

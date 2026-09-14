@@ -77,3 +77,48 @@ def test_yue_health_check() -> None:
 	h = m.health_check()
 	assert h["is_loaded"] is False
 	assert h["circuit_open"] is False
+
+
+def test_yue2_instantiation() -> None:
+	from gbedu_ml.models.yue2 import YuE2Model
+
+	m = YuE2Model()
+	assert not m.is_loaded
+	assert not m.circuit_open
+	assert isinstance(m.model_id, str)
+	assert m.model_id  # non-empty
+
+
+def test_yue2_health_check_unloaded() -> None:
+	from gbedu_ml.models.yue2 import YuE2Model
+
+	m = YuE2Model()
+	h = m.health_check()
+	assert h["model_id"] == m.model_id
+	assert h["is_loaded"] is False
+	assert h["circuit_open"] is False
+
+
+def test_yue2_generate_requires_load() -> None:
+	"""generate() must refuse to run before load() succeeds."""
+	import pytest
+
+	from gbedu_ml.models.yue2 import YuE2Model
+
+	m = YuE2Model()
+	with pytest.raises(AssertionError, match="not loaded"):
+		# generate() is async but the assert fires synchronously before the
+		# executor hop — coroutine never reaches the GPU path.
+		m._generate_sync("warm-up", 4, {})
+
+
+def test_yue2_rejects_invalid_cot() -> None:
+	"""cot must be one of full/melody/off."""
+	import pytest
+
+	from gbedu_ml.models.yue2 import YuE2Model
+
+	m = YuE2Model()
+	m._is_loaded = True
+	with pytest.raises(AssertionError, match="cot"):
+		m._generate_sync("warm-up", 4, {"cot": "bogus"})

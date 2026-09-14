@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Annotated, Any, cast
 
@@ -35,10 +36,10 @@ def _rate_limit[F: Callable[..., Any]](limit_value: str) -> Callable[[F], F]:
 
 
 class RegisterRequest(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	email: EmailStr
 	password: str = Field(min_length=8, max_length=128)
-	full_name: str = Field(min_length=1, max_length=256)
+	full_name: str = Field(min_length=1, max_length=256, validation_alias="fullName")
 	# FMEA S05: honeypot — invisible to real users (hidden via CSS), filled only by bots.
 	# Named 'website' to look like a plausible form field. Must remain empty.
 	website: str | None = Field(default=None, exclude=True)
@@ -51,8 +52,8 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-	model_config = ConfigDict(extra="forbid")
-	refresh_token: str
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
+	refresh_token: str = Field(validation_alias="refreshToken")
 
 
 class LogoutRequest(BaseModel):
@@ -77,25 +78,26 @@ class ResetPasswordRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
-	access_token: str
-	refresh_token: str
-	token_type: str
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
+	access_token: str = Field(alias="accessToken")
+	refresh_token: str = Field(alias="refreshToken")
+	token_type: str = Field(alias="tokenType")
+	expires_at: int = Field(alias="expiresAt")
 
 
 class UserSummary(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	id: str
 	email: str
-	full_name: str
-	is_verified: bool
-	subscription_tier: str
+	full_name: str = Field(alias="fullName")
+	is_verified: bool = Field(alias="isVerified")
+	subscription_tier: str = Field(alias="subscriptionTier")
 
 
 class RegisterResponse(BaseModel):
 	model_config = ConfigDict(extra="forbid")
-	user: UserSummary
-	tokens: TokenResponse
+	user: dict[str, Any]
+	tokens: dict[str, Any]
 
 
 class MessageResponse(BaseModel):
@@ -103,22 +105,23 @@ class MessageResponse(BaseModel):
 	message: str
 
 
-def _token_response(pair: TokenPair) -> TokenResponse:
+def _token_response(pair: TokenPair) -> dict[str, Any]:
 	return TokenResponse(
 		access_token=pair.access_token,
 		refresh_token=pair.refresh_token,
 		token_type=pair.token_type,
-	)
+		expires_at=int(time.time()) + get_settings().jwt.access_token_expire_minutes * 60,
+	).model_dump(by_alias=True, exclude_none=False)
 
 
-def _user_summary(user: User) -> UserSummary:
+def _user_summary(user: User) -> dict[str, Any]:
 	return UserSummary(
 		id=user.id,
 		email=user.email,
 		full_name=user.full_name,
 		is_verified=user.is_verified,
 		subscription_tier=user.subscription_tier.value,
-	)
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────

@@ -66,6 +66,34 @@ RUN pip install --no-cache-dir \
 		pyworld \
 	|| echo "WARNING: RVC installation failed — voice synthesis will be disabled"
 
+# ── audio.cpp (audiocpp_cli) — YuE2-3B GGUF runtime ───────────────────────────
+# Yue2 native generation lives on the dev branch. Pinned to a commit for
+# reproducible builds; override with --build-arg AUDIOCPP_REF=<ref>.
+# CUDA build requires nvcc; when absent we fall back to a CPU build (the
+# adapter selects the backend at runtime from GPU_DEVICE). Failure is
+# non-fatal — YuE2 stays unloaded and the fallback chain skips it.
+ARG AUDIOCPP_REPO=https://github.com/0xShug0/audio.cpp.git
+ARG AUDIOCPP_REF=dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+		git \
+		cmake \
+		ninja-build \
+	&& rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "${AUDIOCPP_REF}" "${AUDIOCPP_REPO}" /build/audiocpp \
+	|| echo "WARNING: audio.cpp clone failed — YuE2 will be disabled"
+RUN if [ -d /build/audiocpp ]; then cd /build/audiocpp \
+	&& if command -v nvcc >/dev/null 2>&1; then \
+		scripts/build_linux.sh --backend cuda --model-set custom --models yue2 --target audiocpp_cli \
+		|| scripts/build_linux.sh --backend cuda --target audiocpp_cli \
+		|| scripts/build_linux.sh --backend cpu --target audiocpp_cli; \
+	else \
+		scripts/build_linux.sh --backend cpu --model-set custom --models yue2 --target audiocpp_cli \
+		|| scripts/build_linux.sh --backend cpu --target audiocpp_cli; \
+	fi \
+	&& mkdir -p /app/audiocpp/bin \
+	&& find build -name audiocpp_cli -type f -exec cp {} /app/audiocpp/bin/ \; \
+	|| echo "WARNING: audiocpp_cli build failed — YuE2 will be disabled"; fi
+
 # ── Stage 2: runner ───────────────────────────────────────────────────────────
 FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime AS runner
 
@@ -83,6 +111,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/venv /app/venv
 COPY --from=builder --chown=gbedu:gbedu /build/services/ml/src /app/src
+COPY --from=builder --chown=gbedu:gbedu /app/audiocpp /app/audiocpp
 
 # HF Hub cache persisted via volume in docker-compose; set here so the process
 # uses a writable path owned by the gbedu user.

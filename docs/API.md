@@ -401,6 +401,22 @@ Response `202`:
 
 Errors: `403 INSUFFICIENT_CREDITS`, `422 VALIDATION_ERROR`, `502 ML_UNAVAILABLE`
 
+#### User-supplied lyrics + renditions
+
+Two optional fields control lyrics and take variation:
+
+- `lyrics` (string, 1–5000 chars): user-supplied lyrics. When present, AI
+  lyric generation is skipped and these lyrics condition music generation
+  directly. Omit (or blank is rejected — omit instead) for AI-written lyrics.
+- `seed` (integer, 0–2147483647): RNG seed. Same prompt + same seed
+  reproduces a take; different seeds produce different takes.
+
+There is no batch endpoint: each rendition is a separate `POST` (1 credit
+each). To produce N takes, submit N requests with distinct seeds, e.g.
+`{..., "lyrics": "[VERSE 1]\n...", "seed": 11}`,
+`{..., "lyrics": "[VERSE 1]\n...", "seed": 29012}`. The studio UI's
+"2/3 takes" option does exactly this and presents a compare view.
+
 ---
 
 ### GET /api/v1/generations/{generation_id}

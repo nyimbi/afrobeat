@@ -221,7 +221,7 @@ class LyricGenerator:
 					f"generation is experimental and quality gate failed"
 				)
 
-		sections = self._parse_sections(raw_lyrics)
+		sections = self.parse_sections(raw_lyrics)
 		return LyricResult(
 			verse1=sections.get("verse1", ""),
 			prehook=sections.get("prehook", ""),
@@ -279,8 +279,13 @@ class LyricGenerator:
 		new_tokens = output_ids[0, input_ids.shape[1] :]
 		return self._tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-	def _parse_sections(self, raw: str) -> dict[str, str]:
-		"""Split raw model output into named sections via regex on section headers."""
+	@staticmethod
+	def parse_sections(raw: str) -> dict[str, str]:
+		"""Split raw model output into named sections via regex on section headers.
+
+		Public so the generation pipeline can shape user-supplied lyrics
+		identically without invoking the LLM.
+		"""
 		normalise = {
 			"verse 1": "verse1",
 			"verse1": "verse1",
@@ -308,6 +313,11 @@ class LyricGenerator:
 			i += 2
 
 		return sections
+
+	@staticmethod
+	def _parse_sections(raw: str) -> dict[str, str]:
+		"""Deprecated alias of parse_sections (kept for backwards compatibility)."""
+		return LyricGenerator.parse_sections(raw)
 
 	async def unload(self) -> None:  # pragma: no cover
 		import torch  # type: ignore[import]

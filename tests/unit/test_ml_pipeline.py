@@ -136,6 +136,114 @@ async def test_music_generator_result_carries_duration() -> None:
 	assert result.duration_seconds == 90
 
 
+async def test_music_generator_chain_includes_yue2() -> None:
+	"""YuE2 occupies slot 2: used when ACE-Step is unavailable."""
+	from gbedu_ml.inference.music_generator import MusicGenerator
+
+	ace = _mock_model("ace-step", is_loaded=False)
+	yue2 = _mock_model("yue2-gguf", is_loaded=True)
+	stable = _mock_model("stable-audio", is_loaded=True)
+	yue = _mock_model("yue", is_loaded=True)
+
+	gen = MusicGenerator(ace_step=ace, stable_audio=stable, yue=yue, yue2=yue2)
+	result = await gen.generate(_make_request())
+
+	assert result.model_used == "yue2-gguf"
+	yue2.generate_safe.assert_awaited_once()
+	stable.generate_safe.assert_not_awaited()
+
+
+async def test_music_generator_skips_yue2_when_circuit_open() -> None:
+	"""Open circuit on YuE2 falls through to Stable Audio."""
+	from gbedu_ml.inference.music_generator import MusicGenerator
+
+	ace = _mock_model("ace-step", is_loaded=True, circuit_open=True)
+	yue2 = _mock_model("yue2-gguf", is_loaded=True, circuit_open=True)
+	stable = _mock_model("stable-audio", is_loaded=True)
+
+	gen = MusicGenerator(ace_step=ace, stable_audio=stable, yue=_mock_model("y", False), yue2=yue2)
+	result = await gen.generate(_make_request())
+
+	assert result.model_used == "stable-audio"
+
+
+async def test_music_generator_passes_lyrics_to_backends() -> None:
+	"""Lyric-aware backends (YuE2) must receive the generated lyrics."""
+	from gbedu_ml.inference.music_generator import MusicGenerator
+
+	ace = _mock_model("ace-step", is_loaded=False)
+	yue2 = _mock_model("yue2-gguf", is_loaded=True)
+	stable = _mock_model("stable-audio", is_loaded=False)
+	yue = _mock_model("yue", is_loaded=False)
+
+	gen = MusicGenerator(
+		ace_step=ace, stable_audio=stable, yue=yue, yue2=yue2, lyrics="[Verse]\ntest lyrics"
+	)
+	await gen.generate(_make_request())
+
+	_, kwargs = yue2.generate_safe.await_args
+	assert kwargs["lyrics"] == "[Verse]\ntest lyrics"
+
+
+async def test_music_generator_prefers_request_lyrics_and_seed() -> None:
+	"""User-supplied lyrics + seed must reach the backend kwargs."""
+	from gbedu_ml.inference.music_generator import MusicGenerator
+
+	ace = _mock_model("ace-step", is_loaded=False)
+	yue2 = _mock_model("yue2-gguf", is_loaded=True)
+	stable = _mock_model("stable-audio", is_loaded=False)
+	yue = _mock_model("yue", is_loaded=False)
+
+	gen = MusicGenerator(
+		ace_step=ace, stable_audio=stable, yue=yue, yue2=yue2, lyrics="[Verse]\nctor lyrics"
+	)
+	req = _make_request()
+	req.lyrics = "[VERSE 1]\nuser lyrics"
+	req.seed = 1234
+	await gen.generate(req)
+
+	_, kwargs = yue2.generate_safe.await_args
+	assert kwargs["lyrics"] == "[VERSE 1]\nuser lyrics"
+	assert kwargs["seed"] == 1234
+
+
+async def test_music_generator_omits_unset_seed() -> None:
+	"""No seed key at all when unset — models apply their own default."""
+	from gbedu_ml.inference.music_generator import MusicGenerator
+
+	ace = _mock_model("ace-step", is_loaded=False)
+	yue2 = _mock_model("yue2-gguf", is_loaded=True)
+
+	gen = MusicGenerator(
+		ace_step=ace,
+		stable_audio=_mock_model("s", False),
+		yue=_mock_model("y", False),
+		yue2=yue2,
+	)
+	await gen.generate(_make_request())
+
+	_, kwargs = yue2.generate_safe.await_args
+	assert "seed" not in kwargs
+
+
+def test_pipeline_builds_lyric_result_from_user_text() -> None:
+	"""User lyrics bypass the LLM but keep the LyricResult shape."""
+	from gbedu_ml.pipeline import GenerationPipeline
+
+	pipeline = GenerationPipeline(
+		music_gen=MagicMock(), lyric_gen=MagicMock(), vocal_synth=MagicMock()
+	)
+	req = _make_request()
+	req.lyrics = "[VERSE 1]\nMo dupe o\n[HOOK]\nJaiye ori mi"
+	result = pipeline._lyrics_from_user_text(req)
+
+	assert result.full_lyrics == "[VERSE 1]\nMo dupe o\n[HOOK]\nJaiye ori mi"
+	assert result.verse1 == "Mo dupe o"
+	assert result.hook == "Jaiye ori mi"
+	assert result.language_used == req.language
+	assert result.fell_back_to_english is False
+
+
 # ── AfrobeatsPromptEngine ──────────────────────────────────────────────────────
 
 

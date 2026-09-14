@@ -191,7 +191,7 @@ class TestOWASPSecurity:
 			f"Expected application/json response, got: {resp.headers['content-type']}"
 		)
 		# The full_name is stored and returned as data, not executed as code.
-		assert resp.json()["user"]["full_name"] == xss
+		assert resp.json()["user"]["fullName"] == xss
 		_no_leak(resp)
 
 	# ── A04: Oversized / extreme payloads ─────────────────────────────────────

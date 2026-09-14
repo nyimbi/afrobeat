@@ -32,6 +32,7 @@ from gbedu_ml.inference.vocal_synthesizer import VocalSynthesizer
 from gbedu_ml.models.ace_step import AceStepModel
 from gbedu_ml.models.stable_audio import StableAudioModel
 from gbedu_ml.models.yue import YuEModel
+from gbedu_ml.models.yue2 import YuE2Model
 from gbedu_ml.pipeline import GenerationPipeline, GenerationPipelineResult
 
 log = structlog.get_logger(__name__)
@@ -40,6 +41,7 @@ log = structlog.get_logger(__name__)
 _ace_step: AceStepModel
 _stable_audio: StableAudioModel
 _yue: YuEModel
+_yue2: YuE2Model
 _lyric_gen: LyricGenerator
 _vocal_synth: VocalSynthesizer
 _music_gen: MusicGenerator
@@ -115,7 +117,7 @@ async def _gpu_memory_watchdog() -> None:  # pragma: no cover
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no cover
-	global _ace_step, _stable_audio, _yue
+	global _ace_step, _stable_audio, _yue, _yue2
 	global _lyric_gen, _vocal_synth, _music_gen, _pipeline
 	global _generation_semaphore, _startup_time
 
@@ -130,6 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no co
 	_ace_step = AceStepModel()
 	_stable_audio = StableAudioModel()
 	_yue = YuEModel()
+	_yue2 = YuE2Model()
 	_lyric_gen = LyricGenerator()
 	_vocal_synth = VocalSynthesizer()
 
@@ -138,12 +141,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no co
 		_load_model("ace_step", _ace_step),
 		_load_model("stable_audio", _stable_audio),
 		_load_model("yue", _yue),
+		_load_model("yue2", _yue2),
 		_load_model("lyric_gen", _lyric_gen),
 		_load_model("vocal_synth", _vocal_synth),
 	)
 
 	# GPU warm-up — run a short dummy generation if at least one audio model loaded
-	for m in (_ace_step, _stable_audio, _yue):
+	for m in (_ace_step, _yue2, _stable_audio, _yue):
 		if m.is_loaded:
 			try:
 				log.info("model.warmup.start", model=m.model_id)
@@ -153,7 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no co
 				log.warning("model.warmup.failed", model=m.model_id, error=str(exc))
 			break  # Only warm up the primary model
 
-	_music_gen = MusicGenerator(_ace_step, _stable_audio, _yue)
+	_music_gen = MusicGenerator(_ace_step, _stable_audio, _yue, yue2=_yue2)
 	_pipeline = GenerationPipeline(_music_gen, _lyric_gen, _vocal_synth)
 
 	_startup_time = time.perf_counter() - t0
@@ -178,6 +182,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pragma: no co
 		_ace_step.unload(),
 		_stable_audio.unload(),
 		_yue.unload(),
+		_yue2.unload(),
 		_lyric_gen.unload(),
 	)
 	log.info("gbedu_ml.shutdown.done")
@@ -220,6 +225,7 @@ async def health() -> dict[str, Any]:
 		"gpu": gpu_info,
 		"models": {
 			"ace_step": _ace_step.health_check(),
+			"yue2": _yue2.health_check(),
 			"stable_audio": _stable_audio.health_check(),
 			"yue": _yue.health_check(),
 			"lyric_gen": {
@@ -235,7 +241,7 @@ async def health() -> dict[str, Any]:
 @app.get("/ready", tags=["ops"])
 async def ready() -> dict[str, str]:
 	"""K8s readiness probe — 200 iff at least one audio model is loaded."""
-	if any(m.is_loaded for m in (_ace_step, _stable_audio, _yue)):
+	if any(m.is_loaded for m in (_ace_step, _yue2, _stable_audio, _yue)):
 		return {"status": "ready"}
 	raise HTTPException(status_code=503, detail="No audio models loaded")
 
@@ -245,6 +251,7 @@ async def list_models(_: str = Depends(_require_api_key)) -> dict[str, Any]:
 	return {
 		"models": [
 			_ace_step.health_check(),
+			_yue2.health_check(),
 			_stable_audio.health_check(),
 			_yue.health_check(),
 		],
@@ -331,6 +338,33 @@ async def generate(
 		"elapsed_seconds": result.elapsed_seconds,
 		"metadata": result.metadata,
 	}
+
+
+# ── Lyrics draft endpoint ──────────────────────────────────────────────────────
+
+
+@app.post(
+	"/lyrics/draft",
+	tags=["generation"],
+	status_code=200,
+)
+async def draft_lyrics(
+	request: GenerationRequest,
+	_: str = Depends(_require_api_key),
+) -> dict[str, Any]:
+	"""Generate a lyric draft only — no audio, no GPU-heavy inference.
+
+	Cheap and fast (~seconds) so users can iterate on words before spending
+	music-generation credits. Returns the LyricResult as JSON.
+	"""
+	if not _lyric_gen.is_loaded:
+		raise HTTPException(status_code=503, detail="Lyric generator not loaded")
+	try:
+		result = await _lyric_gen.generate(request)
+	except Exception as exc:
+		log.exception("lyrics.draft.failed")
+		raise HTTPException(status_code=502, detail=str(exc))
+	return result.model_dump()
 
 
 # ── Voice training endpoint ────────────────────────────────────────────────────

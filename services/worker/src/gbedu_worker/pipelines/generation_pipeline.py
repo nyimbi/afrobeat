@@ -194,6 +194,11 @@ class GenerationPipelineOrchestrator:
 		await self._update_status(job, JobStatus.ml_generating, progress=5)
 		await self._publish_progress(10, "Generating with ML model…")
 
+		# FMEA UX: the ML call dominates wall time (30–90 s+). Subscribe to the
+		# ML service's progress channel and mirror each stage into the job row
+		# so polling clients see movement instead of a frozen 5% bar.
+		progress_task = asyncio.create_task(self._mirror_ml_progress(job))
+
 		payload = {
 			"job_id": self._job_id,
 			"prompt": job.prompt_used,
@@ -209,6 +214,8 @@ class GenerationPipelineOrchestrator:
 					"key",
 					"duration_seconds",
 					"voice_model_id",
+					"lyrics",
+					"seed",
 				)
 			},
 		}
@@ -240,8 +247,56 @@ class GenerationPipelineOrchestrator:
 		self._session.add(job)
 		await self._session.flush()
 
+		progress_task.cancel()
+		try:
+			await progress_task
+		except asyncio.CancelledError:
+			pass
+
+		await self._update_status(job, JobStatus.ml_generating, progress=40)
 		await self._publish_progress(40, "ML generation complete")
 		return result
+
+	async def _mirror_ml_progress(self, job: GenerationJob) -> None:  # pragma: no cover
+		"""Relay ML pub/sub progress into job.progress_percent (5→40% band).
+
+		Maps ML pipeline stages onto the job row so the polling UI shows
+		granular movement during generation. Best-effort — never fails the job.
+		"""
+		import redis.asyncio as aioredis
+
+		try:
+			redis = await cast(Any, aioredis).from_url(
+				_redis_settings.url, encoding="utf-8", decode_responses=True
+			)
+			pubsub = redis.pubsub()
+			await pubsub.subscribe(f"job:{self._job_id}:progress")
+			async for message in pubsub.listen():
+				if message is None or message.get("type") != "message":
+					continue
+				data = json.loads(message.get("data", "{}"))
+				ml_pct = data.get("progress_percent", 0)
+				stage = data.get("stage", "")
+				# ML reports 5→100 internally; compress into the 5→40 job band
+				mirrored = 5 + max(0, min(ml_pct, 100)) * 35 // 100
+				if job.progress_percent < mirrored:
+					job.progress_percent = mirrored
+					self._session.add(job)
+					await self._session.flush()
+				await self._publish_progress(mirrored, f"Generating: {stage.replace('_', ' ')}")
+		except asyncio.CancelledError:
+			raise
+		except Exception as exc:
+			self._log.warning("ml_progress_mirror.failed", error=str(exc))
+		finally:
+			try:
+				await pubsub.aclose()
+			except Exception:
+				pass
+			try:
+				await redis.aclose()
+			except Exception:
+				pass
 
 	async def _call_ml_service(self, payload: dict[str, Any]) -> dict[str, Any]:
 		headers = {

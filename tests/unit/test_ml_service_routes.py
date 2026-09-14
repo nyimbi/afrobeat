@@ -31,6 +31,7 @@ def _setup_globals() -> None:
 	ml_main._ace_step = mock_model
 	ml_main._stable_audio = mock_model
 	ml_main._yue = mock_model
+	ml_main._yue2 = mock_model
 	ml_main._lyric_gen = MagicMock(is_loaded=True)
 	ml_main._vocal_synth = MagicMock(is_loaded=True)
 	ml_main._music_gen = MagicMock()
@@ -105,6 +106,7 @@ def test_ready_returns_503_when_no_model_loaded() -> None:
 	ml_main._ace_step = _make_mock_model(is_loaded=False)
 	ml_main._stable_audio = _make_mock_model(is_loaded=False)
 	ml_main._yue = _make_mock_model(is_loaded=False)
+	ml_main._yue2 = _make_mock_model(is_loaded=False)
 	resp = client.get("/ready")
 	assert resp.status_code == 503
 
@@ -118,7 +120,7 @@ def test_models_returns_model_list() -> None:
 	assert resp.status_code == 200
 	body = resp.json()
 	assert "models" in body
-	assert len(body["models"]) == 3
+	assert len(body["models"]) == 4
 
 
 def test_models_rejects_wrong_api_key() -> None:
@@ -214,6 +216,67 @@ def test_generate_rejects_wrong_api_key() -> None:
 		"mood": "energetic",
 	}
 	resp = client.post("/generate", json=payload, headers={"X-API-Key": "bad"})
+	assert resp.status_code == 403
+
+
+# ── /lyrics/draft ─────────────────────────────────────────────────────────────
+
+
+def test_lyrics_draft_returns_200_on_success() -> None:
+	import gbedu_ml.main as ml_main
+
+	client, _ = _client(api_key="key")
+
+	mock_result = MagicMock()
+	mock_result.model_dump.return_value = {
+		"verse1": "Mo dupe o",
+		"prehook": "",
+		"hook": "Jaiye ori mi",
+		"verse2": "",
+		"bridge": "",
+		"outro": "",
+		"full_lyrics": "Mo dupe o\nJaiye ori mi",
+		"language_used": "yoruba",
+		"fell_back_to_english": False,
+		"structure_retries": 0,
+		"language_disclosure": None,
+	}
+	ml_main._lyric_gen = MagicMock(is_loaded=True)
+	ml_main._lyric_gen.generate = AsyncMock(return_value=mock_result)
+
+	resp = client.post(
+		"/lyrics/draft",
+		json={"prompt": "grateful Yoruba song", "sub_genre": "afrobeats", "language": "yoruba"},
+		headers={"X-API-Key": "key"},
+	)
+	assert resp.status_code == 200
+	body = resp.json()
+	assert body["full_lyrics"] == "Mo dupe o\nJaiye ori mi"
+	assert body["language_used"] == "yoruba"
+	mock_result.model_dump.assert_called_once()
+
+
+def test_lyrics_draft_503_when_not_loaded() -> None:
+	import gbedu_ml.main as ml_main
+
+	client, _ = _client(api_key="key")
+	ml_main._lyric_gen = MagicMock(is_loaded=False)
+
+	resp = client.post(
+		"/lyrics/draft",
+		json={"prompt": "grateful Yoruba song", "sub_genre": "afrobeats", "language": "yoruba"},
+		headers={"X-API-Key": "key"},
+	)
+	assert resp.status_code == 503
+
+
+def test_lyrics_draft_rejects_wrong_api_key() -> None:
+	client, _ = _client(api_key="key")
+	resp = client.post(
+		"/lyrics/draft",
+		json={"prompt": "grateful Yoruba song", "sub_genre": "afrobeats", "language": "yoruba"},
+		headers={"X-API-Key": "bad"},
+	)
 	assert resp.status_code == 403
 
 

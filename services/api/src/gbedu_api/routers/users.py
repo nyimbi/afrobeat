@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
@@ -27,33 +27,37 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 class UserProfileResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 	id: str
 	email: str
-	full_name: str
-	avatar_url: str | None
-	subscription_tier: str
-	subscription_status: str
-	is_verified: bool
-	is_active: bool
-	preferred_language: str
-	created_at: datetime
+	full_name: str = Field(alias="fullName")
+	avatar_url: str | None = Field(alias="avatarUrl")
+	subscription_tier: str = Field(alias="subscriptionTier")
+	subscription_status: str = Field(alias="subscriptionStatus")
+	is_verified: bool = Field(alias="isVerified")
+	is_active: bool = Field(alias="isActive")
+	preferred_language: str = Field(alias="preferredLanguage")
+	created_at: datetime = Field(alias="createdAt")
 
 
 class UpdateProfileRequest(BaseModel):
-	model_config = ConfigDict(extra="forbid")
-	full_name: str | None = Field(default=None, min_length=1, max_length=256)
-	preferred_language: str | None = Field(default=None, min_length=2, max_length=8)
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
+	full_name: str | None = Field(
+		default=None, min_length=1, max_length=256, validation_alias="fullName"
+	)
+	preferred_language: str | None = Field(
+		default=None, min_length=2, max_length=8, validation_alias="preferredLanguage"
+	)
 
 
 class UserStatsResponse(BaseModel):
-	model_config = ConfigDict(extra="forbid")
-	total_tracks: int
-	tracks_ready: int
-	total_generations_today: int
-	daily_limit: int
-	subscription_tier: str
-	subscription_status: str
+	model_config = ConfigDict(extra="forbid", populate_by_name=True)
+	total_tracks: int = Field(alias="totalTracks")
+	tracks_ready: int = Field(alias="tracksReady")
+	total_generations_today: int = Field(alias="totalGenerationsToday")
+	daily_limit: int = Field(alias="dailyLimit")
+	subscription_tier: str = Field(alias="subscriptionTier")
+	subscription_status: str = Field(alias="subscriptionStatus")
 
 
 class DeleteAccountResponse(BaseModel):
@@ -61,7 +65,7 @@ class DeleteAccountResponse(BaseModel):
 	message: str
 
 
-def _profile(user: User) -> UserProfileResponse:
+def _profile(user: User) -> dict[str, Any]:
 	return UserProfileResponse(
 		id=user.id,
 		email=user.email,
@@ -73,7 +77,7 @@ def _profile(user: User) -> UserProfileResponse:
 		is_active=user.is_active,
 		preferred_language=user.preferred_language,
 		created_at=user.created_at,
-	)
+	).model_dump(by_alias=True, exclude_none=False, mode="json")
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -205,7 +209,7 @@ async def get_my_stats(
 		daily_limit=TIER_DAILY_LIMITS[user.subscription_tier],
 		subscription_tier=user.subscription_tier.value,
 		subscription_status=user.subscription_status.value,
-	)
+	).model_dump(by_alias=True, exclude_none=False)
 
 
 @router.delete(

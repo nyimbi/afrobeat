@@ -142,11 +142,26 @@ class GenerationRequest(BaseModel):
 	voice_model_id: str | None = Field(default=None)
 	# Optional custom title — auto-generated from prompt if omitted
 	title: str | None = Field(default=None, min_length=1, max_length=256)
+	# Optional user-supplied lyrics — when present the lyric LLM is skipped
+	# and these lyrics condition music generation directly.
+	lyrics: str | None = Field(default=None, min_length=1, max_length=5000)
+	# Optional RNG seed for reproducible / varied renditions.
+	seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
 
 	@field_validator("prompt")
 	@classmethod
 	def strip_prompt(cls, v: str) -> str:
 		return v.strip()
+
+	@field_validator("lyrics")
+	@classmethod
+	def strip_lyrics(cls, v: str | None) -> str | None:
+		if v is None:
+			return None
+		stripped = v.strip()
+		if not stripped:
+			raise ValueError("lyrics must not be blank — omit the field for AI lyrics")
+		return stripped
 
 
 class GenerationResponse(BaseModel):
