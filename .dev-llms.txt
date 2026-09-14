@@ -1,190 +1,57 @@
-# Large Language Model Configuration Guide
+# Gbẹdu — LLM / ML contributor notes
 
-This document contains the full list of LLM configurations used in the Gbẹdu system.
+Living reference for the models and prompts in this repo. Verify against
+code before trusting; paths below are relative to the repo root.
 
-## Base Model: ACE-Step 1.5
+## Models in the stack
 
-| File | Purpose |
-|------|---------|
-| `libs/ace_step/models/ace_step/models/ace_step1/1400000000/adapter_config.json` | Adapter configuration |
-| `libs/ace_step/models/ace_step/models/ace_step1/1400000000/config.json` | Model configuration |
-| `libs/ace_step/models/ace_step/models/ace_step1/1400000000/model.safetensors` | Model weights (140M) |
-| `libs/ace_step/models/ace_step/models/ace_step1/1400000000/special_tokens_map.json` | Special token mapping |
-| `libs/ace_step/models/ace_step/models/ace_step1/1400000000/vocab.txt` | Vocabulary |
+| Model | Runtime | Purpose | Config |
+|-------|---------|---------|--------|
+| ACE-Step 1.5 | HuggingFace (`ACE-Step/ACE-Step`) | Primary music + vocal generation | `services/ml/src/gbedu_ml/models/ace_step.py` |
+| YuE2-3B-GGUF | audio.cpp `audiocpp_cli` subprocess | Music synthesis slot in the fallback chain | `YUE2_*` envs, `services/ml/src/gbedu_ml/models/yue2.py` |
+| Meta-Llama-3-8B-Instruct | transformers, 4-bit (bnb) | Afrobeats lyric generation | `LLAMA_*` envs, `.../inference/lyric_generator.py` |
+| Stable Audio Open | HuggingFace | Fallback music backend | `services/ml/src/gbedu_ml/models/stable_audio.py` |
+| YuE 7B | HuggingFace | Last-resort fallback backend | `services/ml/src/gbedu_ml/models/yue.py` |
+| RVC v2 | local trainer | Voice cloning / conversion | `.../inference/vocal_synthesizer.py`, `RVC_MODELS_DIR` |
 
-> ⚠️ The model weights have been modified in training to enforce specific output constraints rather than being purely generative.
+Fallback order: ACE-Step → YuE2 → Stable Audio → YuE (see
+`services/ml/src/gbedu_ml/inference/music_generator.py`).
 
-## System Role Instructions by Use Case
+## YuE2 settings (`GBEDU_ML_` env prefix)
 
-**Lyrics Generation**
+- Repo: `audio-cpp/Yue2-3B-GGUF`; weights `yue2-3b-q8_0.gguf`, VAE `yue2-vae-f16.gguf`
+- `YUE2_THREADS=8`, `YUE2_NUM_INFERENCE_STEPS=8`, `YUE2_COT=full`, `YUE2_TIMEOUT_SECONDS=600`
+- CLI kwargs: `lyrics`, `seed`, `cot`, `num_inference_steps`, `style_tags`, `abc`
 
-```
-You are an expert lyricist specializing in African music traditions, particularly:
-- Afrobeats, Amapiano, Ukulele, Afro-Pop, Alto
-- You understand rhythm patterns, vocal flow, and culturally resonant themes.
-- Generate lyrics that tell a story with structure: verse-chorus-verse-chorus-bridge-chorus-outro
-- Output ONLY the lyrics, nothing else. No explanations, no introductions.
+## Prompt engineering
 
-Format:
-[PRE-CHORUS]
-[CHORUS]
-[VERSE]
-[HOOK/CHORUS]
-[VERSE]
-[BRIDGE]
-[CHORUS]
-[OUTRO]
+- Music prompts: `AfrobeatsPromptEngine.build_music_prompt` in
+  `services/ml/src/gbedu_ml/prompts/afrobeats.py` (per-subgenre BPM ranges,
+  percussion, mood, production style; per-language vocal descriptors).
+- Lyric prompts: `build_lyric_prompt` — structured sections
+  `[VERSE 1] / [PRE-HOOK] / [HOOK] / [VERSE 2] / [BRIDGE] / [OUTRO]` with
+  corpus-derived line/word targets and per-language instructions + quality
+  gates (`services/ml/src/gbedu_ml/language/quality_gate.py`).
+- Llama-3 sampler: temperature 0.8, top_p 0.92, repetition_penalty 1.15.
 
-[Note: Mark structural sections clearly. Ensure rhymes and rhythm flow naturally.]
-```
+## API surface for generation
 
-**Music Synthesis Prompt (ACE Step 1.5)**
+- `POST /api/v1/generations` — prompt, subGenre, language, energyLevel,
+  durationSeconds, bpm?, voiceModelId?, lyrics? (1–5000 chars), seed?.
+- `POST /api/v1/lyrics/draft` — lyric-only draft, no quota deduction.
+- `POST /voice-models/upload` (Pro+) — RVC training from samples.
 
-```
-Format your response EXACTLY as:
-{{prompt}}
-Format: Your complete response must be VALID JSON. JSON should only contain a single object with exactly one key-value pair. The key should be "prompt" and the value should be your full response. Do not include any text outside the JSON.
-```
-
-**System Prompts for ACE-Step 1.5:**
-
-| Purpose | Prompt |
-|---------|--------|
-| Songwriting | Create 100 tokens of lyrics that describe a dream about finding something that once belonged to you. |
-| Songwriting 2 | Write an original Amapiano song with a 16 bar verse and an 8 bar chorus. |
-| Songwriting 3 | Write a 3 verse song about a love lost and found with Amapiano music |
-| Songwriting 4 | Write a 3 verse song about friendship and moving forward together |
-| Songwriting 5 | Write a 3 verse song about hope and resilience through hardship |
-| Songwriting 6 | Write a 3 verse song about a journey inward, finding yourself and your purpose |
-| Translation | Translate the given lyrics from one language to another while preserving meaning, rhythm and rhyme |
-| Style Reference | Adapt lyrics to a new genre while maintaining the original meaning and emotion |
-
-## Additional Models
-
-### YoYoMLLM
-
-```
-You are a helpful, precise assistant. When asked a question, provide a direct, helpful answer.
-If you don't know the answer, say you don't know.
-Format your response as:
-<think>
-[Understand what is being asked. Identify constraints and requirements.
-Plan your response structure.]
-</think>
-
-[Your complete, well-structured response following the given constraints]
-</think>
-
-## Prompt Engineering
-
-When using LLMs in the Gbẹdu system, follow these formatting guidelines:
-
-### For text-based models:
-- Provide constraints and formatting requirements in the system prompt
-- Define expected output format explicitly
-- Use "ONLY" and "EXACTLY" to enforce format compliance
-- Give examples of good responses
-
-### For music generation (ACE-Step):
-```
-Generate [style] music at [bpm] BPM with [mood] mood and [mood_adjective] feeling.
-Generate [genre] music featuring [instruments].
-```
-
-## Model Management
-
-- Models are cached in `/models/` once downloaded
-- Pre-download models with:
-```bash
-docker compose exec ml python -c "from gbedu_ml.models import preload_all; import asyncio
-asio.run(preload_all())"
-```
-
-## Testing Recommendations
-
-- Add prompts to unit tests in `libs/core/tests/unit/test_llms.py`
-- Add performance benchmark tests for inference latency
-- Use `pytest-benchmark` for timing comparisons
-- Validate output format against expected schema in tests
-- Include edge cases: empty input, invalid formats, length limits
-
----
-
-**Last updated:** $(date +%Y-%m-%d)
-**Maintained by:** Gbẹdu Development Team
-
-Note: This file will sync with `dev-llms.txt` during deployment via GitHub Actions. Do not commit changes to `.dev-llms.txt` manually — edit `README.md` and the CI pipeline handles it automatically.
-
-> ❗ **DO NOT** commit this file manually. Changes should be applied via a pull request which will automatically update `.dev-llms.txt`.
-
-This file is managed automatically by the deployment pipeline from `README.md`. Make changes there and the CI will update `.dev-llms.txt` on merge to `main`. This ensures consistency across environments.
-
-When making changes, **DO NOT** manually commit `.dev-llms.txt`. Instead:
-
-1. Edit `README.md` to add/update LLM configurations
-2. Your PR will automatically update `.dev-llms.txt` on merge
-3. The automated script will sync any local changes to `.dev-llms.txt` into the repo
-
-This prevents drift between documentation and the actual `.dev-llms.txt` file across different environments.
-
----
-
-## Models Used in Gbẹdu
-
-| Model | Provider | Purpose |
-|-------|----------|---------|
-| ACE-Step 1.5 | MusicGen | Music generation |
-| Llama-3 8B (fine-tuned) | HuggingFace | Lyrics generation |
-| YuE2-3B-GGUF | audio.cpp | Music synthesis |
-| RVC v2 | Meta | Voice conversion |
-| Ollama (local) | Local deployment | Offline generation |
-
-## Troubleshooting
-
-- **Python crash on import**: `pip install -r requirements/base.txt`
-- **CUDA/GPU not detected**: Ensure NVIDIA drivers are installed or use `torch.backends.mps enabled=True` for Apple Silicon
-- **Out of memory**: Reduce model precision with `--quantization q4_k_s` or use CPU backend
-
-## Quick Start
+## Local commands
 
 ```bash
-# Setup dependencies
-uv sync
-
-# Start the local server (dev mode)
-uv run gbedu-web:run
-
-# Run inference locally
-uv run python generate_song.py \
-    --model ace_step \
-    --output song_output.wav
+make install            # uv sync --all-packages
+make docker-up          # full stack
+make test-unit          # fast backend tests, no containers
+make test-web           # frontend vitest suite (services/web)
 ```
 
-## Contributing
+## Backend test layout
 
-Add new LLM configurations or update system prompts by:
-1. Adding documentation to `README.md` under "LLM Configuration"
-2. If using a new model, add to the `LLM_MODELS` dictionary
-3. Update `.dev-llms.txt` if making changes locally and committing
-4. Add tests for the new configuration in `lib/core/tests/test_llm_config.py`
-
-## References
-
-- Official model documentation: [`AceStep-Document`](https://github.com/diylab-ncut/MusicGen2)
-- HuggingFace ACE-Step: `Muscledream/AceStep-Musicgen-1.5`
-- Ace Step documentation: `AceStep Documentation`
-- ACE-Step technical report: https://arxiv.org/abs/2309.14492
-
----
-
-> ⚠️ **Note:** This file contains internal configuration and tooling information. Do not share this file publicly. Access is restricted to developers with a valid access key.
->
-> **File ownership:** This document is owned by the Gbẹdu engineering team and is subject to update at any time.
-
----
-
-## License
-
-This file contains internal development configuration and tooling. It is not part of the public facing API or documentation.
-
-Copyright © 2025 Nyimbi Odero. All Rights Reserved.
+- `tests/unit/` — API/ML/worker unit tests (no I/O); e.g.
+  `test_api_lyrics_routes.py`, `test_ml_pipeline.py`, `test_ml_service_routes.py`.
+- No mocks except LLM weights and external payment APIs (repo convention).

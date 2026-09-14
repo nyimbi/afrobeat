@@ -362,40 +362,55 @@ Response `204`: no body.
 
 ### POST /api/v1/generations
 
-Request a new AI music generation. Deducts 1 credit from the user's balance.
+Request a new AI music generation. Deducts 1 credit from the user's daily
+quota (verified email required).
 
-Request:
+Request (camelCase):
 ```json
 {
-  "genre": "afrobeats",
-  "bpm": 128,
-  "key": "A minor",
-  "mood": "euphoric",
-  "instruments": ["drums", "talking_drum", "bass", "guitar", "synth"],
-  "lyrics_prompt": "a song about late nights in Lagos, celebrating life",
-  "voice_model_id": null,
-  "duration_seconds": 180,
-  "title": "Lagos Nights"
+  "prompt": "a song about late nights in Lagos, celebrating life",
+  "subGenre": "afrobeats",
+  "language": "pidgin",
+  "energyLevel": 7,
+  "durationSeconds": 120,
+  "bpm": 104,
+  "voiceModelId": null,
+  "lyrics": null,
+  "seed": null
 }
 ```
 
 Field constraints:
-- `genre`: one of `afrobeats`, `afropop`, `amapiano`, `highlife`, `afro-fusion`, `afro-trap`
-- `bpm`: integer 60–200
-- `key`: note + mode, e.g. `"A minor"`, `"C# major"`
-- `mood`: one of `euphoric`, `melancholic`, `energetic`, `romantic`, `spiritual`, `rebellious`
-- `instruments`: 1–8 items from the instrument catalog
-- `lyrics_prompt`: max 500 characters; omit for instrumental
-- `duration_seconds`: 30–300
-- `title`: max 200 characters; auto-generated if omitted
+- `prompt`: 10–2048 chars
+- `subGenre`: e.g. `afrobeats`, `afropop`, `afrofusion`, `alte`, `highlife`,
+  `amapiano_cross`, `uk_afrobeats`, `bongo_flava`, `soukous`, `mbalax`,
+  `gengetone`, `benga`, `taarab`, `soca`, `calypso`, `afro_soca`
+- `language`: `english`, `pidgin`, `yoruba`, `igbo`, `mix`, `swahili`,
+  `lingala`, `zulu`, `twi`
+- `energyLevel`: integer 1–10 (default 5)
+- `durationSeconds`: integer 10–300 (default 30)
+- `bpm`: integer 60–200, optional
+- `voiceModelId`: RVC voice model id, optional (uses AI voice when null)
+- `lyrics`: 1–5000 chars, optional — user-supplied lyrics; skips AI lyric
+  generation. Omit for AI-written lyrics.
+- `seed`: integer 0–2147483647, optional — same prompt + same seed
+  reproduces a take; distinct seeds give distinct takes.
 
 Response `202`:
 ```json
 {
-  "generation_id": "01906d30-...",
-  "status": "pending",
-  "estimated_seconds": 120,
-  "credits_remaining": 17
+  "id": "01906d30-...",
+  "status": "queued",
+  "progressPercent": 0,
+  "promptUsed": "a song about late nights in Lagos, celebrating life",
+  "modelUsed": null,
+  "errorMessage": null,
+  "trackId": null,
+  "createdAt": "2026-01-01T00:00:00+00:00",
+  "startedAt": null,
+  "completedAt": null,
+  "statusMessage": "Your track is queued...",
+  "estimatedSeconds": 102
 }
 ```
 
@@ -421,48 +436,33 @@ each). To produce N takes, submit N requests with distinct seeds, e.g.
 
 ### GET /api/v1/generations/{generation_id}
 
-Poll generation status. Poll every 3–5 seconds; do not poll faster.
+Poll generation status. The studio polls every 2 seconds.
 
-Response `200` (pending/processing):
+Statuses: `queued` → `ml_generating` → `audio_processing` → `uploading`
+→ `complete` (terminal: `complete`, `failed`, `cancelled`).
+
+Response `200` (same shape while running and when done):
 ```json
 {
-  "generation_id": "01906d30-...",
-  "status": "processing",
-  "progress": {
-    "step": "music",
-    "percent": 45
-  },
-  "estimated_seconds_remaining": 65
+  "id": "01906d30-...",
+  "status": "ml_generating",
+  "progressPercent": 35,
+  "promptUsed": "a song about late nights in Lagos, celebrating life",
+  "modelUsed": null,
+  "errorMessage": null,
+  "trackId": null,
+  "createdAt": "2026-01-01T00:00:00+00:00",
+  "startedAt": "2026-01-01T00:00:05+00:00",
+  "completedAt": null,
+  "statusMessage": "",
+  "estimatedSeconds": null
 }
 ```
 
-Response `200` (completed):
-```json
-{
-  "generation_id": "01906d30-...",
-  "status": "completed",
-  "track": {
-    "id": "01906d31-...",
-    "title": "Lagos Nights",
-    "mp3_url": "https://cdn.gbedu.com/...",
-    "wav_url": "https://cdn.gbedu.com/...",
-    "duration_ms": 180000,
-    "bpm": 128,
-    "key": "A minor"
-  }
-}
-```
-
-Response `200` (failed):
-```json
-{
-  "generation_id": "01906d30-...",
-  "status": "failed",
-  "error": "ML service timeout after 600s"
-}
-```
-
-Note: credits are refunded automatically on failure.
+When `status` is `complete`, `trackId` holds the finished track — fetch it
+via `GET /api/v1/tracks/{id}`. When `failed`, `errorMessage` describes the
+cause. `DELETE /api/v1/generations/{id}` cancels a non-terminal job and
+refunds the quota slot.
 
 ---
 
