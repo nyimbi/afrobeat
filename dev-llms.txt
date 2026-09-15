@@ -1,57 +1,152 @@
-# Gbẹdu — LLM / ML contributor notes
+# Gbẹdu — agent orientation (dev-llms.txt)
 
-Living reference for the models and prompts in this repo. Verify against
-code before trusting; paths below are relative to the repo root.
+Read this first. It is a code-verified map of the repo: the model stack, the
+generation control surface, the API, and the conventions an agent needs to make
+changes without reading the whole tree. Verify anything below against the code
+before relying on it; paths are relative to the repo root. Keep this file short
+and current — it is the single onboarding document for coding agents.
 
-## Models in the stack
+## What this is
 
-| Model | Runtime | Purpose | Config |
-|-------|---------|---------|--------|
-| ACE-Step 1.5 | HuggingFace (`ACE-Step/ACE-Step`) | Primary music + vocal generation | `services/ml/src/gbedu_ml/models/ace_step.py` |
-| YuE2-3B-GGUF | audio.cpp `audiocpp_cli` subprocess | Music synthesis slot in the fallback chain | `YUE2_*` envs, `services/ml/src/gbedu_ml/models/yue2.py` |
-| Meta-Llama-3-8B-Instruct | transformers, 4-bit (bnb) | Afrobeats lyric generation | `LLAMA_*` envs, `.../inference/lyric_generator.py` |
-| Stable Audio Open | HuggingFace | Fallback music backend | `services/ml/src/gbedu_ml/models/stable_audio.py` |
-| YuE 7B | HuggingFace | Last-resort fallback backend | `services/ml/src/gbedu_ml/models/yue.py` |
-| RVC v2 | local trainer | Voice cloning / conversion | `.../inference/vocal_synthesizer.py`, `RVC_MODELS_DIR` |
+AI Afrobeats / African music generation platform. A text prompt plus optional
+controls becomes a full song (lyrics, music, vocals, master). Python 3.12
+workspace (uv) with four services + a Next.js frontend; Celery for async work;
+Postgres, Redis, Cloudflare R2.
 
-Fallback order: ACE-Step → YuE2 → Stable Audio → YuE (see
-`services/ml/src/gbedu_ml/inference/music_generator.py`).
+## Repository layout
 
-## YuE2 settings (`GBEDU_ML_` env prefix)
+```
+libs/core      gbedu-core   shared models, config, DB, auth, schemas, telemetry
+libs/audio     gbedu-audio  DSP: analysis, mastering, separation, effects, pipeline
+services/api   gbedu-api    FastAPI public HTTP API           (:8000)
+services/ml    gbedu-ml     FastAPI model inference service   (:8001)
+services/worker gbedu-worker Celery — generation + voice + billing tasks
+services/web   gbedu-web    Next.js 14 studio UI              (:3000)
+tests/unit                  Fast, container-free tests (this is the main suite)
+data/corpus                 Curated African lyrics corpus
+docs/                       API.md, ARCHITECTURE.md, RUNBOOKS.md, FMEA.md, ...
+```
 
-- Repo: `audio-cpp/Yue2-3B-GGUF`; weights `yue2-3b-q8_0.gguf`, VAE `yue2-vae-f16.gguf`
-- `YUE2_THREADS=8`, `YUE2_NUM_INFERENCE_STEPS=8`, `YUE2_COT=full`, `YUE2_TIMEOUT_SECONDS=600`
-- CLI kwargs: `lyrics`, `seed`, `cot`, `num_inference_steps`, `style_tags`, `abc`
+## Model stack and fallback order
 
-## Prompt engineering
+Music generation tries each backend in order (circuit-breaker per model),
+`services/ml/src/gbedu_ml/inference/music_generator.py`:
 
-- Music prompts: `AfrobeatsPromptEngine.build_music_prompt` in
-  `services/ml/src/gbedu_ml/prompts/afrobeats.py` (per-subgenre BPM ranges,
-  percussion, mood, production style; per-language vocal descriptors).
-- Lyric prompts: `build_lyric_prompt` — structured sections
-  `[VERSE 1] / [PRE-HOOK] / [HOOK] / [VERSE 2] / [BRIDGE] / [OUTRO]` with
-  corpus-derived line/word targets and per-language instructions + quality
-  gates (`services/ml/src/gbedu_ml/language/quality_gate.py`).
-- Llama-3 sampler: temperature 0.8, top_p 0.92, repetition_penalty 1.15.
+1. **ACE-Step 1.5** — primary music + vocal generation (`models/ace_step.py`)
+2. **YuE2-3B-GGUF** — audio.cpp `audiocpp_cli` subprocess (`models/yue2.py`)
+3. **Stable Audio Open** — fallback (`models/stable_audio.py`)
+4. **YuE 7B** — last resort (`models/yue.py`)
 
-## API surface for generation
+Other models:
 
-- `POST /api/v1/generations` — prompt, subGenre, language, energyLevel,
-  durationSeconds, bpm?, voiceModelId?, lyrics? (1–5000 chars), seed?.
+- **Meta-Llama-3-8B-Instruct** (4-bit bnb) — lyric generation
+  (`inference/lyric_generator.py`), sampler temp 0.8 / top_p 0.92 / rep 1.15.
+- **RVC v2** — voice cloning / conversion (`inference/vocal_synthesizer.py`).
+- **Demucs** — stem separation (`libs/audio/.../separation.py`).
+
+YuE2 envs use the `GBEDU_ML_` prefix: `YUE2_THREADS`, `YUE2_NUM_INFERENCE_STEPS`,
+`YUE2_COT`, `YUE2_TIMEOUT_SECONDS`. CLI kwargs accepted: `lyrics`, `seed`,
+`cot`, `num_inference_steps`, `style_tags`, `abc`.
+
+## Generation control surface
+
+These are the user-facing levers, all plumbed through the same chain
+(`GenerationCreateRequest` → `GenerationRequest` (ml_client) →
+`GenerationJob.metadata_` → worker ML payload). See
+"Generation controls" in `README.md` for the full description.
+
+- **`lyrics`** (1–5000 chars) — when present, skips the lyric LLM and
+  conditions music directly. UI has three modes (`LyricsMode` in
+  `services/web/src/lib/types.ts`): `ai` | `write` | `describe`.
+  `describe` uses `POST /api/v1/lyrics/draft` (no credits, no verified-email
+  gate) then submits the edited text.
+- **`seed`** (0–2³¹−1) — reproducible takes. Renditions use distinct seeds.
+- **`referenceAudioKey`** — R2 key from `POST /api/v1/generations/reference`.
+  Worker `_resolve_reference()` downloads it, runs
+  `gbedu_audio.AudioAnalyzer.extract_features()` (bpm/key/energy), then
+  `apply_reference_steering()` clamps measured BPM into ML bounds (80–130) and
+  augments the ML prompt. User-set `bpm` always wins; DB `prompt_used` is never
+  mutated.
+- **`voiceModelId`** — preset archetype or user-cloned RVC model. Cloning is
+  Pro+, upload-gated behind a consent checkbox.
+
+Renditions: 1–3 (`MAX_RENDITIONS = 3` in `services/web/src/store/generation.ts`),
+one job per seed, credited individually.
+
+## API surface (public, `:8000`, prefix `/api/v1`)
+
+- `POST /api/v1/generations` — submit a job. Body: `prompt`, `subGenre`,
+  `language`, `energyLevel`, `durationSeconds`, `bpm?`, `voiceModelId?`,
+  `lyrics?`, `seed?`, `referenceAudioKey?`. Returns 202 with job.
+- `POST /api/v1/generations/reference` — multipart audio upload
+  (MP3/WAV/FLAC/OGG), returns `{key}` namespaced to the caller.
+- `GET /api/v1/generations/{job_id}` — poll status.
+- `DELETE /api/v1/generations/{job_id}` — cancel a queued job.
+- `GET /api/v1/generations` — history.
 - `POST /api/v1/lyrics/draft` — lyric-only draft, no quota deduction.
-- `POST /voice-models/upload` (Pro+) — RVC training from samples.
+- `GET /api/v1/voice-models` — presets + user's custom models.
+- `POST /api/v1/voice-models/upload` — RVC training from samples (Pro+).
+- `GET /api/v1/voice-models/{id}/status`, `DELETE /api/v1/voice-models/{id}`.
 
-## Local commands
+Full reference: `docs/API.md`.
+
+## Generation pipeline (worker)
+
+`services/worker/src/gbedu_worker/pipelines/generation_pipeline.py` orchestrates:
+prompt → (optional reference analysis) → lyrics → ML `/generate` → DSP
+post-processing → R2 upload → notify. Jobs are idempotent and checkpointed;
+failures route to a DLQ (see `docs/RUNBOOKS.md`). Rate limit for free tier is
+`RATE_LIMIT_FREE = "3/day"`.
+
+## Local commands (uv workspace)
 
 ```bash
 make install            # uv sync --all-packages
-make docker-up          # full stack
-make test-unit          # fast backend tests, no containers
+make docker-up          # full stack (9 containers)
+make docker-up-infra    # postgres + redis + localstack only
+make test-unit          # fast backend suite, no containers
 make test-web           # frontend vitest suite (services/web)
+make lint               # ruff
+make typecheck          # pyright
+make migrate            # alembic upgrade head
 ```
 
-## Backend test layout
+Python is 3.12 via `uv run`. The system `python` may be older — always run
+Python through `uv run python` (the codebase uses PEP 695 generics, e.g.
+`def f[T](...)`, which need 3.12).
 
-- `tests/unit/` — API/ML/worker unit tests (no I/O); e.g.
-  `test_api_lyrics_routes.py`, `test_ml_pipeline.py`, `test_ml_service_routes.py`.
-- No mocks except LLM weights and external payment APIs (repo convention).
+## Testing
+
+- Main suite: `tests/unit/` — no containers, no I/O.
+- `make test-unit` for backend; `npm run test` in `services/web` for vitest.
+- Convention: **no mocks** except LLM weights and external payment APIs
+  (repo rule). Use `pytest-httpserver` for HTTP, real objects elsewhere.
+- Async tests are bare `async def test_...` (`asyncio_mode = "auto"`).
+- `gbedu-core` and `gbedu-audio` must hold ≥ 90% coverage.
+
+## Code standards (non-obvious ones)
+
+- **Tabs, not spaces** (Python and TS).
+- `| None` unions, built-in generics (`list[str]`), no `typing.List/Optional`.
+- UUID7 ids via `gbedu_core._uuid7.uuid7str`.
+- `structlog` only — never `print()` or stdlib `logging`.
+- Config via `gbedu_core.config.Settings` — never `os.environ` directly.
+- Async SQLAlchemy; external calls get `tenacity` retry + `circuitbreaker`.
+- Pydantic models use `extra="forbid"` and camelCase `validation_alias` for
+  transport fields (e.g. `validation_alias="referenceAudioKey"`).
+- `alembic` migrations live in `libs/core/src/gbedu_core/migrations/`, every one
+  implements `downgrade()`.
+
+## When you change something
+
+1. Backend feature → schema (`libs/core/.../schemas/`), router
+   (`services/api/.../routers/`), service (`services/api/.../services/`),
+   worker pipeline if async, then unit tests in `tests/unit/`.
+2. Frontend feature → types + `api.ts` in `services/web/src/lib/`, store in
+   `services/web/src/store/`, component in
+   `services/web/src/components/studio/`, wire into
+   `services/web/src/app/(studio)/studio/page.tsx`.
+3. Update `docs/API.md` for endpoint changes and this file for capability
+   changes.
+4. Gates: `make test-unit`, `make lint`, `make typecheck`, and
+   `npm run typecheck && npm run lint && npm run test` in `services/web`.

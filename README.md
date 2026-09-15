@@ -18,6 +18,7 @@ Four Python services + one Next.js frontend, wired together with Celery, Postgre
 - [Testing](#testing)
 - [Code standards](#code-standards)
 - [Database migrations](#database-migrations)
+- [Generation controls](#generation-controls)
 - [ML models](#ml-models)
 - [Lyrics corpus](#lyrics-corpus)
 - [Standalone generation script](#standalone-generation-script)
@@ -30,11 +31,13 @@ Four Python services + one Next.js frontend, wired together with Celery, Postgre
 
 Gbẹdu takes a text prompt — genre, mood, language, tempo, instrument palette — and runs a multi-step AI pipeline:
 
-1. **Lyrics generation** — Llama-3 8B fine-tuned on Afrobeats, Amapiano, Afro-rumba, Bongo Flava, and other African styles; outputs in English, Pidgin, Yoruba, Igbo, Hausa, Swahili, Lingala, and more.
-2. **Music generation** — ACE-Step 1.5 diffusion model, conditioned on genre tags, BPM, and the generated lyrics. Produces a full song with vocals and instrumentation.
+1. **Lyrics generation** — Llama-3 8B fine-tuned on Afrobeats, Amapiano, Afro-rumba, Bongo Flava, and other African styles; outputs in English, Pidgin, Yoruba, Igbo, Hausa, Swahili, Lingala, and more. Users can also **write their own lyrics** or **draft-and-edit** them before committing to audio.
+2. **Music generation** — ACE-Step 1.5 diffusion model (with YuE2-3B-GGUF, Stable Audio Open, and YuE fallbacks), conditioned on genre tags, BPM, the lyrics, and — optionally — the tempo/key/feel of an **uploaded reference track**.
 3. **Audio post-processing** — `gbedu-audio` DSP pipeline: format normalisation, genre-tuned EQ and compression, loudness normalisation to −14 LUFS, stem separation, 320 kbps MP3 export.
-4. **Voice conversion** (optional) — RVC v2 applies a selected artist voice model to the generated vocals.
+4. **Voice conversion** (optional) — RVC v2 applies a selected preset or **user-cloned** voice model to the generated vocals.
 5. **Distribution** — output is uploaded to Cloudflare R2; signed URLs are returned to the user.
+
+Users can generate up to **3 renditions** per prompt (distinct seeds) to explore variations, and iterate on lyrics before spending credits via the draft-only endpoint.
 
 ---
 
@@ -90,8 +93,9 @@ User prompt ("chill amapiano vibe, 110 BPM, Zulu lyrics")
 │                                                             │
 │  Fallback chain (circuit breaker pattern):                 │
 │   1. ACE-Step 1.5 (primary — best quality)                │
-│   2. Stable Audio Open (if ACE-Step OOM or down)          │
-│   3. YuE (if both above fail)                             │
+│   2. YuE2-3B-GGUF (audio.cpp subprocess)                  │
+│   3. Stable Audio Open (if ACE-Step OOM or down)          │
+│   4. YuE 7B (last resort)                                 │
 └────────────────────────────┬────────────────────────────────┘
                              │ (optional)
                              ▼
@@ -217,8 +221,8 @@ Full diagram and rationale: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
 | Service | Port | Tech | Role |
 |---------|------|------|------|
-| `api` | 8000 | FastAPI | Auth, tracks, generation requests, payments, marketplace |
-| `ml` | 8001 | FastAPI | ACE-Step inference, lyrics generation, RVC voice conversion |
+| `api` | 8000 | FastAPI | Auth, tracks, generation + lyric draft + reference upload, voice models, payments, marketplace |
+| `ml` | 8001 | FastAPI | ACE-Step / YuE2 / Stable Audio / YuE inference, lyrics generation, RVC voice conversion |
 | `worker` | — | Celery | Async generation pipeline, email, webhook retry |
 | `web` | 3000 | Next.js 14 | User-facing studio UI |
 | `postgres` | 5432 | PostgreSQL 16 | Primary relational store |
@@ -527,14 +531,63 @@ Full procedure: `docs/RUNBOOKS.md` § "Database migration procedure".
 
 ---
 
+## Generation controls
+
+Beyond the plain text prompt, four controls shape a generation. All four are optional and compose.
+
+### Lyrics
+
+The studio offers three lyric modes (`LyricsMode` in `services/web/src/lib/types.ts`):
+
+| Mode | Behaviour | API |
+|------|-----------|-----|
+| `ai` | Model writes lyrics from the prompt | `POST /api/v1/generations` (no `lyrics`) |
+| `write` | User supplies finished lyrics | `POST /api/v1/generations` with `lyrics` (1–5000 chars) |
+| `describe` | Model drafts lyrics, user edits, then submits | `POST /api/v1/lyrics/draft` → edit → submit with `lyrics` |
+
+`POST /api/v1/lyrics/draft` costs no credits and needs no verified email — it only runs the lyric model, never audio. It returns structured sections (`verse1`, `prehook`, `hook`, `verse2`, `bridge`, `outro`, `fullLyrics`) plus `languageUsed`, `fellBackToEnglish`, and `structureRetries` so the UI can disclose language fallbacks.
+
+The `lyrics` field is plumbed through `GenerationRequest` → `GenerationJob.metadata_` → ML payload. When present, the ML service skips lyric generation and conditions music on the supplied text.
+
+### Renditions
+
+A generation can produce 1–3 takes. Each rendition is a separate job with a distinct random `seed`, so outputs differ. `submitRenditions(req, count)` in `services/web/src/store/generation.ts` fans out the jobs and polls each independently. Credits are deducted per rendition.
+
+`seed` is also an explicit request field: submitting the same prompt with the same seed reproduces a take.
+
+### Reference track
+
+Users can upload a beat or song (MP3/WAV/FLAC/OGG) as a **starting point**:
+
+1. `POST /api/v1/generations/reference` stores the file under `reference-samples/{user_id}/...` in R2 and returns a key.
+2. `referenceAudioKey` is passed on submit; the router verifies the key is namespaced to the caller.
+3. The worker's `_resolve_reference()` downloads it and runs `gbedu_audio.AudioAnalyzer.extract_features()` — tempo, key, energy.
+4. `apply_reference_steering()` (a pure, unit-tested function in `generation_pipeline.py`) clamps the measured BPM into the ML range (80–130) and augments the ML prompt with a reference-character sentence.
+
+Precedence rules: an explicit user `bpm` always wins; the measured tempo only fills an unset `bpm`. The DB `prompt_used` is never mutated — only the ML-bound copy of the payload. The frontend surface is `services/web/src/components/studio/reference-upload.tsx`.
+
+### Voice
+
+Voice conversion is optional and selected via `voiceModelId`. Two sources:
+
+- **Preset archetypes** — listed by `GET /api/v1/voice-models`.
+- **Cloned voices** — `POST /api/v1/voice-models/upload` accepts samples, queues RVC v2 training (`services/worker/src/gbedu_worker/tasks/voice.py`), and exposes progress via `GET /api/v1/voice-models/{id}/status`. Pro+ only, gated behind a consent checkbox in `services/web/src/components/studio/voice-selector.tsx`.
+
+If a voice model is active, the worker separates vocals (Demucs), converts timbre via RVC, and remixes.
+
+---
+
 ## ML models
 
 Models are downloaded lazily on first inference request from HuggingFace Hub and cached at `/models/` inside the `ml` container.
 
 | Model | Size | Task |
 |-------|------|------|
-| ACE-Step 1.5 | ~7 GB | Music + vocal generation |
+| ACE-Step 1.5 | ~7 GB | Music + vocal generation (primary) |
+| YuE2-3B-GGUF | ~3 GB | Music synthesis fallback (audio.cpp) |
 | Llama-3 8B (SFT) | ~4 GB | Afrobeats lyrics generation |
+| Stable Audio Open | ~4 GB | Music fallback |
+| YuE 7B | ~14 GB | Last-resort music fallback |
 | RVC v2 | varies | Voice conversion per artist |
 
 Pre-download all models (avoids cold start on first request):
@@ -546,73 +599,13 @@ docker compose exec ml python -c \
 
 Fine-tuning guide: [`docs/FINE_TUNING.md`](docs/FINE_TUNING.md)
 
-## LLM instructions (.dev-llms.txt)
+---
 
-Comprehensive instructions for large language models used in the Gbẹdu system. Append this to `.dev-llms.txt` (do not duplicate):
+## LLM / agent orientation (`dev-llms.txt`)
 
-"""
+New contributors and coding agents should read [`dev-llms.txt`](dev-llms.txt) first. It is a code-verified map of the model stack, the generation control surface, the API endpoints, the local commands, and the repo conventions — enough to orient an agent without reading the whole codebase.
 
-SYSTEM_ROLE
-===============
-You are an expert software engineer. Write complete, correct, runnable code.
-Format your response EXACTLY as:
-[Analyze the problem, consider edge cases, choose your approach,
-explain your algorithm and data structure choices.]
-
-[Complete, correct, runnable solution with docstring and type hints]
-
-Brief explanation of time/space complexity.
-"""
-
-CONTEXT: You are a senior software engineer. Write complete, correct, runnable
-code. Use Python 3.12+ syntax, typing hints, docstrings, and type-checking.
-
-LANGUAGE: Python, SQL, bash, markdown, HTML, and any tooling for the
-task at hand. If code, provide COMPLETE runnable code.
-
-STYLE & CONVENTIONS:
--------------------
-- Python: type-hint every function, prefer `-> None` for void functions,
-  use `| None` for optional returns, use `Protocol` and `Protocol` hints.
-- Use `match/async for` blocks, avoid `next()` with generators.
-- Use `dataclasses`, `functools.cached_property`, `weakref.WeakValue` for caching.
-- Avoid `__all__` exports unless truly public.
-- Use `@dataclass(frozen=True)` for imutable data classes.
-- Use `match` instead of `if/elif/else` for exhaustive classification.
-- Use `asyncio.Semaphore` for concurrency, `asyncio.to_thread` for CPU blocking,
-  `asyncio.subprocess` for async subprocesses.
-- Use pytest (`pytest-benchmark`, `pytest-asyncio`, `pytest-junit`).
-- Use `ruamark` for structured logging, `structlog` for production logs.
-- Use `alembic` for migrations. Use `asyncpg` (not `pgsync`).
-- Use `uv` as the package manager. Use `mypy` with `pydantic.v1`.
-- Use `ruff`. Avoid `black` (ruff handles formatting).
-- Avoid `os.environ`, `sys.stdin`, `sys.argv`, `os.makedirs(exist_ok=True)`,
-  `sys.exit(0)`. Use config modules, `argparse`, `shutil.rmtree` on exit,
-  and `exit_code=3` for fatal errors.
-
-FORMAT
-------
-When code is requested:
-[Analyze the problem, consider edge cases, choose your approach,
-explain your algorithm and data structure choices.]
-
-[Complete, runnable solution with docstring, type hints, and brief complexity note]
-
-If the answer is multiple branches (A, B, C):
-- Briefly explain the tradeoff between options.
-- Choose the best approach and explain why.
-
-When you make an error and catch it, explain what you learned and how you fixed it.
-Remember: concise, complete, correct. End with a brief summary.
-
-CONSTRAINTS
------------
-- One complete, correct, runnable solution.
-- No external libraries beyond what's specified in requirements.
-- If unsure, ask clarifying questions before writing code.
-- If you make an error and catch it, explain the mistake and the fix.
-- End with a brief summary of what you've delivered.
-"""
+Keep `dev-llms.txt` in sync with the code: it is the single source of truth for agent onboarding and is intentionally short.
 
 ---
 
@@ -729,11 +722,15 @@ afrobeat/
 │   │       ├── main.py            app factory, lifespan, middleware
 │   │       ├── deps.py            FastAPI dependency providers
 │   │       ├── middleware/        rate limiting, request ID, CORS
-│   │       ├── routers/           auth, tracks, generations, payments, ...
+│   │       ├── routers/           auth, tracks, generations, lyrics, voice_models, ...
 │   │       └── services/          business logic (auth, generation, storage, ...)
 │   ├── ml/                 gbedu-ml — ML inference service (:8001)
 │   ├── worker/             gbedu-worker — Celery task queue
 │   └── web/                Next.js 14 frontend (:3000)
+│       └── src/
+│           ├── app/(studio)/studio/  generation studio
+│           ├── components/studio/    prompt input, lyrics stage, reference upload, voice selector
+│           └── store/                zustand stores (auth, generation)
 │
 ├── data/
 │   └── corpus/             Curated African lyrics corpus (30+ songs, 15+ languages)
@@ -750,8 +747,10 @@ afrobeat/
 │   ├── ARCHITECTURE.md     System diagram, service responsibilities, data flows
 │   ├── API.md              Full REST API reference
 │   ├── RUNBOOKS.md         Operational runbooks, incident response, deploys
+│   ├── FMEA.md             Failure mode analysis
 │   └── FINE_TUNING.md      ML model fine-tuning procedures
 │
+├── dev-llms.txt            Agent/LLM onboarding map (model stack, API, conventions)
 ├── generate_song.py        Standalone CLI — instrumental / vocals / full composition
 ├── docker-compose.yml      Full local stack (9 services)
 ├── docker-compose.override.yml  Dev overrides (hot reload, volume mounts)
